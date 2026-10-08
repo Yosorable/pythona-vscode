@@ -125,15 +125,11 @@ npm test
 ```
 
 Local browser checks use an installed Google Chrome and Playwright WebKit with an
-iPad viewport. The CI template installs Playwright Chromium and WebKit. The tests use temporary
+iPad viewport. The tests use temporary
 projects and cover actual saves, workspace switching, dirty-file choices, split
 editors, nested-file search, offline loading, and the pre-JavaScript background.
 Python checks cover filesystem boundaries, symlinks, conflicting writes, persistence,
 HTTP request validation, and shutdown.
-
-The [GitHub Actions template](ci/github-actions.yml) is included as a regular file.
-To enable hosted checks, copy it to `.github/workflows/ci.yml` and push using
-a credential allowed to manage workflows.
 
 Run **`tests/native_smoke.py`** inside Pythona to exercise the real UIKit container,
 WebKit readiness, Unicode saves, and split editors. It uses temporary files, closes
