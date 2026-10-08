@@ -197,3 +197,54 @@ test('a new untitled file saves into the selected project through Save As', asyn
     .catch(error => error.code === 'ENOENT' ? null : Promise.reject(error))).toMatch(/^print\("new file 你好"\)\r?\n$/);
   await expect(page.locator('.explorer-viewlet')).toContainText('created.py');
 });
+
+test('File and Edit popups accept taps over an open editor', async ({ browser, host }) => {
+  const page = await browser.newPage({
+    viewport: { width: 1210, height: 782 },
+    screen: { width: 1210, height: 834 },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)',
+    hasTouch: true,
+  });
+
+  try {
+    await page.goto(host.url);
+    await ready(page);
+    await startPicker(page);
+    await choose(page, 'Project One');
+    await page.getByText('main.py', { exact: true }).dblclick();
+    await command(page, 'cursorBottom');
+    await command(page, 'type', { text: '# saved from the menu\n' });
+
+    // WKWebView can keep the titlebar inactive while the user taps its menus.
+    await page.locator('.part.titlebar').evaluate(element => element.classList.add('inactive'));
+
+    const menu = page.locator('.menubar-menu-items-holder');
+    await page.getByRole('menuitem', { name: 'File', exact: true }).tap();
+    await menu.getByText('Save', { exact: true }).tap();
+    await expect.poll(() => readFile(join(host.documents, 'Project One/main.py'), 'utf8'))
+      .toContain('# saved from the menu');
+
+    await page.getByRole('menuitem', { name: 'Edit', exact: true }).tap();
+    await menu.getByText('Find', { exact: true }).tap();
+    await expect(page.locator('.find-widget').getByRole('textbox', { name: 'Find', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await page.getByRole('menuitem', { name: 'View', exact: true }).tap();
+    await menu.getByText('Editor Layout', { exact: true }).tap();
+    await menu.getByText('Split Right', { exact: true }).tap();
+    await expect(page.locator('.editor-group-container')).toHaveCount(2);
+
+    await page.getByRole('menuitem', { name: 'Go', exact: true }).tap();
+    const goToFile = menu.getByRole('menuitem', { name: /^Go to File/ });
+    expect(await goToFile.evaluate(item => {
+      const rect = item.getBoundingClientRect();
+      return item.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    })).toBe(true);
+    await page.keyboard.press('Escape');
+    await shortcut(page, 'p');
+    await page.locator('.quick-input-widget input').fill('main.py');
+    await expect(page.locator('.quick-input-list')).toContainText('main.py');
+  } finally {
+    await page.close();
+  }
+});

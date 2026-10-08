@@ -13,6 +13,10 @@ declare global {
   }
 }
 
+if (window.webkit?.messageHandlers?.workbenchReady) {
+  document.documentElement.classList.add('pythona-webview');
+}
+
 window.pythonaWorkbench = {
   ready: false,
   requestClose: async () => { await call('host.close'); },

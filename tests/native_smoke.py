@@ -79,7 +79,27 @@ def main():
                 await run('type',{text:'# Native save 你好 🐍\n'});
                 await run('workbench.action.files.save');
                 await run('workbench.action.splitEditorRight');
-                await report({passed:true,width:innerWidth,height:innerHeight,userAgent:navigator.userAgent,
+                const painted = () => new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+                await painted();
+                const menus = {};
+                for (const name of ['File', 'Edit', 'Selection', 'View', 'Go', 'Help']) {
+                  const button = [...document.querySelectorAll('.menubar-menu-button')].find(item=>item.textContent===name);
+                  if (!button) throw new Error('Missing menu: '+name);
+                  for (const type of ['mousedown', 'mouseup']) {
+                    button.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,button:0}));
+                  }
+                  await painted();
+                  const holder = document.querySelector('.menubar-menu-items-holder');
+                  if (!holder) throw new Error('Menu did not open: '+name);
+                  const items = [...holder.querySelectorAll('.action-item')].filter(item=>item.textContent.trim());
+                  menus[name] = items.length > 0 && items.every(item=>{
+                    const rect = item.getBoundingClientRect();
+                    return item.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2));
+                  });
+                  window.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));
+                  await painted();
+                }
+                await report({passed:Object.values(menus).every(Boolean),menus,width:innerWidth,height:innerHeight,userAgent:navigator.userAgent,
                   editors:document.querySelectorAll('.editor-group-container').length,
                   background:getComputedStyle(document.documentElement).backgroundColor,
                   text:document.body.innerText});

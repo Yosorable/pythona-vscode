@@ -24,3 +24,23 @@ body {
 .monaco-workbench .part.titlebar .titlebar-right {
   padding-right: 36px;
 }
+
+/* Inactive titlebar opacity creates a stacking context in WKWebView. Match the
+   menu layer above editor resize handles, below workbench dialogs and quick input. */
+.monaco-workbench .part.titlebar {
+  position: relative;
+  z-index: 2000;
+}
+
+/* The WKWebView user agent omits Safari, bypassing the upstream overflow fix.
+   iPadOS also clips the menu bar itself when painting its fixed popups. */
+.pythona-webview .monaco-workbench .part.titlebar,
+.pythona-webview .monaco-workbench .part.titlebar > .titlebar-container,
+.pythona-webview .monaco-workbench .part.titlebar .menubar {
+  overflow: visible;
+}
+
+/* An open menu must stay opaque even if WebKit has not reported window focus. */
+.pythona-webview .monaco-workbench .part.titlebar.inactive:has(.menubar-menu-button.open) > .titlebar-container {
+  opacity: 1;
+}

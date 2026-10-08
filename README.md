@@ -127,12 +127,12 @@ npm test
 Local browser checks use an installed Google Chrome and Playwright WebKit with an
 iPad viewport. The tests use temporary
 projects and cover actual saves, workspace switching, dirty-file choices, split
-editors, nested-file search, offline loading, and the pre-JavaScript background.
+editors, menu actions, nested-file search, offline loading, and the pre-JavaScript background.
 Python checks cover filesystem boundaries, symlinks, conflicting writes, persistence,
 HTTP request validation, and shutdown.
 
 Run **`tests/native_smoke.py`** inside Pythona to exercise the real UIKit container,
-WebKit readiness, Unicode saves, and split editors. It uses temporary files, closes
+WebKit readiness, Unicode saves, split editors, and menu hit testing. It uses temporary files, closes
 its own window/server, and writes a report to `.local/native-smoke.json`.
 Automated smoke tests do not substitute for hands-on Chinese IME, touch-selection,
 and physical keyboard checks on an iPad.
