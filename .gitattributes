@@ -1,0 +1,3 @@
+frontend/dist/** linguist-generated=true
+frontend/THIRD_PARTY_NOTICES.txt linguist-generated=true
+licenses/** linguist-vendored=true
