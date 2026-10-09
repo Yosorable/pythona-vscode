@@ -6,6 +6,7 @@ import socket
 import tempfile
 import time
 import unittest
+import uuid
 from unittest.mock import patch
 from urllib.parse import quote
 
@@ -183,6 +184,33 @@ class ServerTests(unittest.TestCase):
         for action in ("fs.read", "fs.write"):
             reply = json.loads(self.api(action, {"workspace": workspace["id"], "path": "main.py", "data": "text"})[2])
             self.assertEqual(reply["error"]["code"], "InvalidRequest")
+
+    def test_execution_keeps_session_checks_and_survives_listener_recovery(self):
+        workspace = self.app.open_workspace("Project")
+        (self.documents / "Project/main.py").write_text('print(input("Name: "))\n')
+        payload = {"workspace": workspace["id"], "id": str(uuid.uuid4()), "path": "main.py"}
+        for headers in ({"Origin": "https://example.com"}, {"X-Pythona-Session": "wrong"},
+                        {"Host": "attacker.example"}):
+            self.assertEqual(self.api("run.start", payload, headers)[0], 403)
+        self.assertIsNone(self.app.runner.current)
+        self.assertIn("result", json.loads(self.api("run.start", payload)[2]))
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            status = json.loads(self.api("run.status", payload)[2])["result"]
+            if status["state"] == "input":
+                break
+            time.sleep(.01)
+        self.assertEqual(status["state"], "input")
+        self.server.pause()
+        self.server.resume()
+        restored = json.loads(self.api("run.status", payload)[2])["result"]
+        self.assertEqual((restored["id"], restored["input"]), (payload["id"], status["input"]))
+        reply = self.api("run.input", {**payload, "request": status["input"], "text": "你好"})
+        self.assertIn("result", json.loads(reply[2]))
+        self.assertTrue(self.app.runner.current.done.wait(3))
+        completed = json.loads(self.api("run.status", payload)[2])["result"]
+        self.assertEqual(completed["exitCode"], 0)
+        self.assertEqual(completed["output"], "Name: 你好\n你好\n")
 
     def test_oversized_requests_are_rejected_before_reading_the_body(self):
         status, _, _ = self.request("POST", self.server.prefix + "api", b"", {

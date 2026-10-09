@@ -52,9 +52,11 @@ def main():
         except KeyboardInterrupt:
             pass
         finally:
-            if server:
-                server.close()
-            app.close()
+            try:
+                app.close()
+            finally:
+                if server:
+                    server.close()
 
 
 if __name__ == "__main__":

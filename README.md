@@ -6,9 +6,9 @@ the VS Code workbench through [monaco-vscode-api](https://github.com/CodinGame/m
 Clone this project into Pythona and run **`main.py`**. The compiled frontend is
 included; using the app needs no Node.js, CDN, account, or remote server.
 
-This is an independent open-source project, not a Microsoft product.
+![Pythona VSCode on iPad with Python editing, output, and inline input](docs/images/pythona-vscode-ipad.png)
 
-## First version
+## Features
 
 - A VS Code workbench with the Explorer, editor tabs, split editors, breadcrumbs,
   command palette, quick open, and workspace text search.
@@ -16,6 +16,7 @@ This is an independent open-source project, not a Microsoft product.
   is an empty workbench; Documents is a folder-selection boundary, not the workspace.
 - Edit and save real files, and create, rename, or delete files and folders.
 - Syntax highlighting for Python, JSON, and Markdown.
+- Run Python files locally, with text output, interactive input, arguments, and Stop.
 - Save, discard, or cancel when switching or closing a workspace with unsaved edits.
 - Reopen the last workspace and retain a list of recently opened projects.
 - Retain user settings and the selected color theme across launches.
@@ -24,8 +25,8 @@ This is an independent open-source project, not a Microsoft product.
 - A keyboard-sized native viewport, theme-matched startup colors, and a readiness
   handshake that waits for theme loading and layout restoration before showing the workbench.
 
-This initial version focuses on editing. Python execution, a REPL or SSH terminal,
-Git integration, AI assistance, and an extension marketplace are not implemented.
+A REPL or SSH terminal, graphical output, a debugger, Git integration, AI assistance,
+and an extension marketplace are not implemented.
 
 ## Run in Pythona
 
@@ -53,6 +54,42 @@ Saves reject a detected conflicting on-disk edit.
 
 Save before stopping the hosting Python script or closing Pythona. Unsaved buffers
 are held in WebKit memory and cannot be recovered after an iPadOS process termination.
+
+## Run Python files
+
+Open a `.py` file and use **Run Python File** (the **▶** button in the editor title)
+or press **Ctrl+F5**.
+The command also appears in the command palette and file context menu. Modified
+workspace files are saved before execution; a failed save prevents the run.
+**Run Python File with Arguments…** accepts space-separated arguments with quotes
+around values containing spaces. The working directory is the selected project;
+the script's own directory is also available for imports.
+
+The bottom **Python** panel displays standard output, errors, and tracebacks.
+For `input()` and other standard-input reads, click the input field at the bottom
+of this panel and press Enter or **Send** to submit a line. Input requests never
+take keyboard focus automatically. Escape, switching editors, and hiding the panel
+keep the pending input and its draft; a page reload restores the draft for the same
+input request. Select **Python: waiting for input** in the status bar to show the panel.
+**Pythona: Send End of Input (EOF)** ends standard input.
+The most recent 1,048,576 text characters are retained in the host, including across connection
+recovery or a page reload. Output is text only; there is no shell or image display.
+
+Use **Stop Python** (the **■** button) or **Shift+F5** to request `KeyboardInterrupt`. Python loops
+and input waits can stop promptly; imports finish before interruption, and blocking
+native calls such as `time.sleep()` must return first. The status remains **Stopping**
+until execution has actually ended, including threads started with `threading.Thread`.
+A new run is available only after the previous one finishes. Leaving the workspace
+offers to stop an active run and waits for it to finish.
+
+Execution uses a Python worker thread without changes to Pythona. Each run gets a
+fresh top-level namespace, and project Python modules reload from source on rerun.
+The host restores its standard streams, arguments, import path, and working directory
+after execution. This is a shared interpreter, not a separate process or sandbox:
+scripts have Pythona's permissions, imported third-party modules retain shared state,
+and a native extension that holds the GIL can also delay the editor's Python server.
+Standard-stream file descriptors and native writes directly to process stdout/stderr
+are not connected to the Python panel.
 
 ## Browser preview
 
@@ -99,12 +136,15 @@ vscode_app/
   workspace.py             Workspace selection, recent folders, and state
   preferences.py           User settings and the cached startup theme
   filesystem.py            Descriptor-relative file operations and atomic saves
+  execution.py             Python worker, text streams, cancellation, and run state
 frontend/
   src/workbench.ts          VS Code services, commands, and folder picker
   src/filesystem.ts         Workbench filesystem provider
   src/bridge.ts             Local request transport
   src/storage.ts            Workbench storage adapter
   src/preferences.ts        Theme readiness and user-settings persistence
+  src/execution.ts          Run/Stop commands, output polling, and interactive input
+  src/pythonConsole.ts      Python panel, transcript, and persistent inline input
   src/strings.ts            Product translations
   dist/                    Offline production bundle
 tests/                     Python integration and native smoke tests
@@ -114,8 +154,10 @@ tests/                     Python integration and native smoke tests
 Node.js is a build tool only. At runtime a Python HTTP server binds an ephemeral
 port on `127.0.0.1` and serves the local bundle. This supplies the origin needed
 by ES modules, workers, and WebAssembly. File requests are handled by Python
-threads and translated through a workspace filesystem provider. No code execution
-endpoint is exposed.
+threads and translated through a workspace filesystem provider. Execution requests
+select a `.py` file in the open workspace and retain its workspace and run identities.
+They do not accept arbitrary code strings. Run and input requests are not automatically
+replayed after an ambiguous connection failure.
 
 File contents travel as HTTP byte bodies, preserving the original encoding and
 binary data without Base64. File requests retain the workspace identity and save
@@ -171,6 +213,11 @@ Native-input browser checks cover tap targeting, dragging, long presses, and del
 callbacks while switching editors or using the command palette.
 Python checks cover filesystem boundaries, symlinks, conflicting writes, persistence,
 failed preference writes, HTTP request validation, listener recovery, and shutdown.
+Execution checks cover project imports, stream restoration, Unicode/binary standard
+I/O, EOF, cancellation, child threads, exit codes, bounded output, and stale requests.
+Built-frontend checks cover the Run/Stop buttons and keyboard shortcuts, save-before-run,
+inline input without focus changes, draft recovery, arguments, workspace close, reload,
+and recovery from lost start/input responses without replaying them.
 
 Run **`tests/native_smoke.py`** inside Pythona to exercise the real UIKit container,
 WebKit readiness with delayed dark/light themes, matching native colors, Unicode saves,
@@ -179,6 +226,9 @@ its own window/server, and writes a report to `.local/native-smoke.json`.
 **`tests/native_resume.py`** deliberately stops the listener while keeping the actual
 WebView and dirty edits alive. It exercises the lifecycle callbacks and native **×**
 button, including cancel and save, and writes `.local/native-resume.json`.
+**`tests/native_execution.py`** runs the execution tests in Pythona's embedded
+interpreter and exercises Run, input, Stop, rerun, native modules, and subsequent
+editing in the actual workbench. It writes `.local/native-execution.json`.
 Automated smoke tests do not substitute for hands-on Chinese IME, touch-selection,
 and physical keyboard checks on an iPad.
 For native keyboard checks, reopen a previously edited workspace through `main.py`,

@@ -250,8 +250,10 @@ def main():
         while not app.closed.wait(0.05):
             pass
     finally:
-        if host:
-            builtins.run_on_ui(host.close).wait()
-        if server:
-            server.close()
-        app.close()
+        try:
+            app.close()
+        finally:
+            if host:
+                builtins.run_on_ui(host.close).wait()
+            if server:
+                server.close()

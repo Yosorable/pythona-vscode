@@ -39,6 +39,8 @@ import { WorkspaceFiles, workspaceURI } from './filesystem';
 import { HostStorage } from './storage';
 import { restorePreferences } from './preferences';
 import { t } from './strings';
+import { installExecution } from './execution';
+import { createPythonConsole, pythonConsoleID } from './pythonConsole';
 
 export async function start(bootstrap: Bootstrap): Promise<void> {
   window.MonacoEnvironment = {
@@ -54,6 +56,7 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
 
   registerCustomProvider('file', new WorkspaceFiles(bootstrap.workspace));
   await initUserConfiguration(bootstrap.preferences.settings);
+  const pythonConsole = createPythonConsole(bootstrap.workspace?.id);
   const configurationDefaults = {
     'workbench.colorTheme': 'Dark Modern',
     'workbench.startupEditor': 'none',
@@ -139,22 +142,53 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
         { command: 'pythona.openFolder', title: t('openFolder'), category: 'Pythona' },
         { command: 'pythona.closeFolder', title: t('closeFolder'), category: 'Pythona' },
         { command: 'pythona.closeWindow', title: t('closeWindow'), category: 'Pythona' },
+        { command: 'pythona.runPython', title: t('runPython'), category: 'Pythona',
+          icon: '$(play)', enablement: '!pythona.pythonRunning' },
+        { command: 'pythona.runPythonArgs', title: t('runPythonArgs'), category: 'Pythona',
+          enablement: '!pythona.pythonRunning' },
+        { command: 'pythona.stopPython', title: t('stopPython'), category: 'Pythona',
+          icon: '$(debug-stop)', enablement: 'pythona.pythonRunning' },
+        { command: 'pythona.pythonInput', title: t('pythonInput'), category: 'Pythona',
+          enablement: 'pythona.pythonInput' },
+        { command: 'pythona.pythonEOF', title: t('pythonEOF'), category: 'Pythona',
+          enablement: 'pythona.pythonInput' },
       ],
+      keybindings: [
+        { command: 'pythona.runPython', key: 'ctrl+f5',
+          when: 'resourceExtname == .py && !pythona.pythonRunning' },
+        { command: 'pythona.stopPython', key: 'shift+f5', when: 'pythona.pythonRunning' },
+      ],
+      menus: {
+        'view/title': [
+          { command: 'pythona.stopPython', when: `view == ${pythonConsoleID} && pythona.pythonRunning`, group: 'navigation@10' },
+          { command: 'pythona.pythonEOF', when: `view == ${pythonConsoleID} && pythona.pythonInput` },
+        ],
+        'editor/title': [
+          { command: 'pythona.runPython', when: 'resourceExtname == .py && !pythona.pythonRunning', group: 'navigation@10' },
+          { command: 'pythona.stopPython', when: 'pythona.pythonRunning', group: 'navigation@10' },
+        ],
+        'editor/context': [{ command: 'pythona.runPython', when: 'resourceExtname == .py', group: 'pythona' }],
+        'explorer/context': [{ command: 'pythona.runPython', when: 'resourceExtname == .py', group: 'pythona' }],
+      },
     },
   }, ExtensionHostKind.LocalProcess);
   const api = await extension.getApi();
   await extension.setAsDefaultApi();
+  const execution = installExecution(api, bootstrap.workspace, pythonConsole);
   const preferences = await restorePreferences(bootstrap.preferences, error => {
     void api.window.showErrorMessage(`${t('preferencesFailed')} ${error instanceof Error ? error.message : String(error)}`);
   });
 
   async function confirmLeave(): Promise<boolean> {
-    if (!api.workspace.textDocuments.some(document => document.isDirty)) return true;
-    const answer = await api.window.showWarningMessage(
-      t('saveChanges'), { modal: true }, t('saveAll'), t('discard'),
-    );
-    if (answer === t('saveAll')) return api.workspace.saveAll(true);
-    return answer === t('discard');
+    if (api.workspace.textDocuments.some(document => document.isDirty)) {
+      const answer = await api.window.showWarningMessage(
+        t('saveChanges'), { modal: true }, t('saveAll'), t('discard'),
+      );
+      if (answer === t('saveAll')) {
+        if (!await api.workspace.saveAll(true)) return false;
+      } else if (answer !== t('discard')) return false;
+    }
+    return execution.beforeLeave();
   }
 
   async function flush(): Promise<void> {

@@ -120,6 +120,300 @@ async function editorPoint(page: Page, index = 0) {
   return { x: area.x + Math.min(area.width / 2, 130), y: area.y + 10 };
 }
 
+async function openPythonWorkspace(page: Page, host: Host, source: string) {
+  await writeFile(join(host.documents, 'Project One', 'main.py'), source);
+  await page.goto(host.url);
+  await ready(page);
+  await startPicker(page);
+  await choose(page, 'Project One');
+  await command(page, '_workbench.open', { scheme: 'file', path: '/Documents/Project One/main.py' });
+}
+
+const pythonOutput = (page: Page) => page.locator('.python-console-output .view-lines');
+const pythonInput = (page: Page) => page.locator('.python-console-input input');
+
+test('Python Run button saves edits and displays output and exceptions', async ({ page, host }) => {
+  await openPythonWorkspace(page, host, 'print("saved source")\n');
+  await command(page, 'cursorBottom');
+  await command(page, 'type', { text: 'print("unsaved addition")\nraise ValueError("run example")\n' });
+  await page.locator('.editor-actions .codicon-play').click();
+  await expect(pythonOutput(page)).toContainText('saved source');
+  await expect(pythonOutput(page)).toContainText('unsaved addition');
+  await expect(pythonOutput(page)).toContainText('ValueError: run example');
+  await expect(pythonOutput(page)).toContainText('exit code 1');
+  expect(await readFile(join(host.documents, 'Project One', 'main.py'), 'utf8')).toContain('unsaved addition');
+  await expect(page.locator('.editor-actions .codicon-play')).toBeVisible();
+});
+
+test('Python keyboard shortcuts run saved edits and stop from output or inline input', async ({ page, host }) => {
+  await openPythonWorkspace(page, host, 'print("keyboard run")\n');
+  await command(page, 'cursorBottom');
+  await command(page, 'type', { text: 'while True: pass\n' });
+  await page.keyboard.press('Control+F5');
+  await expect(pythonOutput(page)).toContainText('keyboard run');
+  expect(await readFile(join(host.documents, 'Project One', 'main.py'), 'utf8')).toContain('while True: pass');
+  await pythonOutput(page).click();
+  await page.keyboard.press('Shift+F5');
+  await expect(pythonOutput(page)).toContainText('Python stopped.');
+
+  await command(page, 'workbench.action.focusActiveEditorGroup');
+  await command(page, 'editor.action.selectAll');
+  await command(page, 'type', { text: 'input("Stop from this prompt: ")\n' });
+  await page.keyboard.press('Control+F5');
+  const input = pythonInput(page);
+  await expect(input).toBeEditable();
+  await input.click();
+  await page.keyboard.press('Shift+F5');
+  await expect(input).not.toBeEditable();
+  await expect(pythonOutput(page)).toContainText('Python stopped.');
+  await expect(page.locator('.editor-actions .codicon-play')).toBeVisible();
+});
+
+test('Python Run targets the file selected immediately before its toolbar button is tapped', async ({ page, host }) => {
+  await writeFile(join(host.documents, 'Project One', 'loop.py'), 'print("second selected file")\n');
+  await openPythonWorkspace(page, host, 'print("first selected file")\n');
+  await page.locator('.editor-actions .codicon-play').click();
+  await expect(pythonOutput(page)).toContainText('first selected file');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+  await page.locator('.explorer-viewlet').getByText('loop.py', { exact: true }).click();
+  await page.locator('.editor-actions .codicon-play').click();
+  await expect(pythonOutput(page)).toContainText('second selected file');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+});
+
+test('Python Run uses the clicked split while explicit file commands retain their target', async ({ page, host }) => {
+  await writeFile(join(host.documents, 'Project One', 'right.py'), 'print("right script")\n');
+  await openPythonWorkspace(page, host, 'print("left script")\n');
+  await command(page, 'workbench.action.splitEditorRight');
+  await command(page, '_workbench.open', { scheme: 'file', path: '/Documents/Project One/right.py' });
+  await page.locator('.editor-group-container').first().getByRole('tab', { name: /main\.py/ }).click();
+  await page.locator('.editor-group-container').first().locator('.editor-actions .codicon-play').click();
+  await expect(pythonOutput(page)).toContainText('left script');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+  await command(page, 'pythona.runPython', { scheme: 'file', path: '/Documents/Project One/right.py' });
+  await expect(pythonOutput(page)).toContainText('right script');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+});
+
+test('Python inline input keeps focus and its draft across Escape, panel hiding, and reload', async ({ page, host }, testInfo) => {
+  await openPythonWorkspace(page, host, 'import sys\nname = input("Name: ")\nprint("Hello", name)\nprint("EOF:", repr(sys.stdin.read()))\n');
+  const originalFocus = await page.evaluateHandle(() => document.activeElement);
+  await page.keyboard.press('Control+F5');
+  const input = pythonInput(page);
+  await expect(input).toBeEditable();
+  expect(await page.evaluate(element => document.activeElement === element, originalFocus)).toBe(true);
+  await expect(page.locator('.quick-input-widget:visible')).toHaveCount(0);
+  if (testInfo.project.use.hasTouch) await input.tap();
+  else await input.click();
+  await expect(input).toBeFocused();
+  await page.keyboard.insertText('你好 🐍');
+  await page.keyboard.press('Escape');
+  await expect(input).toHaveValue('你好 🐍');
+  await command(page, 'workbench.action.focusActiveEditorGroup');
+  await expect(input).toHaveValue('你好 🐍');
+  await command(page, 'workbench.action.togglePanel');
+  await expect(input).toBeHidden();
+  await expect(page.getByText('Python: waiting for input', { exact: true })).toBeVisible();
+  await page.getByText('Python: waiting for input', { exact: true }).click();
+  await expect(input).toHaveValue('你好 🐍');
+  await expect(input).not.toBeFocused();
+  await page.reload();
+  await ready(page);
+  await expect(input).toBeVisible();
+  await expect(input).toHaveValue('你好 🐍');
+  await expect(input).not.toBeFocused();
+  await input.click();
+  await input.press('Enter');
+  await expect(pythonOutput(page)).toContainText('Hello 你好 🐍');
+  await expect(input).toBeEditable();
+  await expect(input).toHaveValue('');
+  await command(page, 'pythona.pythonEOF');
+  await expect(pythonOutput(page)).toContainText("EOF: ''");
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+});
+
+test('Python inline input handles composition and a lost reply without submitting twice', async ({ page, host }) => {
+  await openPythonWorkspace(page, host, 'print("first:", input("First: "))\nprint("second:", input("Second: "))\n');
+  await page.keyboard.press('Control+F5');
+  const input = pythonInput(page);
+  await expect(input).toBeEditable();
+  let submissions = 0;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api', async route => {
+    if (route.request().postDataJSON()?.action !== 'run.input') return route.continue();
+    submissions++;
+    if (submissions > 1) return route.continue();
+    await route.fetch();
+    await held;
+    await route.abort('failed');
+  });
+  await input.fill('你好 🐍');
+  await input.dispatchEvent('compositionstart');
+  await input.press('Enter');
+  expect(submissions).toBe(0);
+  await input.dispatchEvent('compositionend');
+  await input.press('Enter');
+  await expect.poll(() => submissions).toBe(1);
+  await input.press('Enter');
+  await expect(pythonOutput(page)).toContainText('first: 你好 🐍');
+  await command(page, 'workbench.action.focusActiveEditorGroup');
+  const editorFocus = await page.evaluateHandle(() => document.activeElement);
+  release();
+  await expect(input).toBeEditable();
+  expect(await page.evaluate(element => document.activeElement === element, editorFocus)).toBe(true);
+  await expect(input).toHaveValue('');
+  expect(submissions).toBe(1);
+  await input.fill('second line');
+  await page.locator('.python-console-input button').click();
+  await expect(pythonOutput(page)).toContainText('second: second line');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+  expect(submissions).toBe(2);
+});
+
+test('Python inline input retains an unsent draft after a connection failure for an explicit retry', async ({ page, host }) => {
+  await openPythonWorkspace(page, host, 'print(input("Message: "))\n');
+  await page.keyboard.press('Control+F5');
+  const input = pythonInput(page);
+  await expect(input).toBeEditable();
+  let submissions = 0;
+  await page.route('**/api', async route => {
+    if (route.request().postDataJSON()?.action !== 'run.input') return route.continue();
+    if (++submissions === 1) return route.abort('failed');
+    return route.continue();
+  });
+  await input.fill('keep this line');
+  await input.press('Enter');
+  await expect(page.getByText('The local workspace connection is unavailable.', { exact: true })).toBeVisible();
+  await expect(input).toBeEditable();
+  await expect(input).toHaveValue('keep this line');
+  expect(submissions).toBe(1);
+  await input.press('Enter');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+  expect(submissions).toBe(2);
+});
+
+test('Python Stop interrupts a loop and a rerun imports edited modules', async ({ page, host }) => {
+  await openPythonWorkspace(page, host, 'print("loop ready")\nwhile True: pass\n');
+  await page.locator('.editor-actions .codicon-play').click();
+  await expect(pythonOutput(page)).toContainText('loop ready');
+  await page.locator('.editor-actions .codicon-debug-stop').click();
+  await expect(pythonOutput(page)).toContainText('Python stopped.');
+  const file = join(host.documents, 'Project One', 'main.py');
+  const helper = join(host.documents, 'Project One', 'helper.py');
+  await writeFile(file, 'import helper\nprint(helper.value)\n');
+  await writeFile(helper, 'value = "first import"\n');
+  await command(page, 'pythona.runPython');
+  await expect(pythonOutput(page)).toContainText('first import');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+  await writeFile(helper, 'value = "fresh import"\n');
+  await command(page, 'pythona.runPython');
+  await expect(pythonOutput(page)).toContainText('fresh import');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+});
+
+test('Python arguments preserve quotes and SystemExit leaves the workbench running', async ({ page, host }) => {
+  await openPythonWorkspace(page, host, 'import sys\nprint(repr(sys.argv[1:]))\nsys.exit(7)\n');
+  await page.evaluate(() => { void (window as any).pythonaWorkbench.executeCommand('pythona.runPythonArgs'); });
+  const input = page.locator('.quick-input-widget:visible input');
+  await input.fill('one "two words" 你好');
+  await input.press('Enter');
+  await expect(pythonOutput(page)).toContainText("['one', 'two words', '你好']");
+  await expect(pythonOutput(page)).toContainText('exit code 7');
+  await command(page, 'cursorBottom');
+  await command(page, 'type', { text: '# editor still works\n' });
+  await command(page, 'workbench.action.files.save');
+  expect(await readFile(join(host.documents, 'Project One', 'main.py'), 'utf8')).toContain('editor still works');
+});
+
+test('a lost Python start response is reconciled without executing twice', async ({ page, host }) => {
+  await openPythonWorkspace(page, host,
+    'from pathlib import Path\np = Path("run-count.txt")\np.write_text(str(int(p.read_text()) + 1) if p.exists() else "1")\nprint("ran once")\n');
+  let starts = 0;
+  await page.route('**/api', async route => {
+    if (route.request().postDataJSON()?.action !== 'run.start') return route.continue();
+    starts++;
+    await route.fetch();
+    await route.abort('failed');
+  });
+  await page.locator('.editor-actions .codicon-play').click();
+  await expect(pythonOutput(page)).toContainText('ran once');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+  expect(starts).toBe(1);
+  expect(await readFile(join(host.documents, 'Project One', 'run-count.txt'), 'utf8')).toBe('1');
+});
+
+test('a delayed foreground status read cannot replace a newly started Python run', async ({ page, host }) => {
+  await openPythonWorkspace(page, host, 'print("previous run")\n');
+  await command(page, 'pythona.runPython');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+  const request = async (action: string, payload = {}) => {
+    const response = await fetch(new URL('api', host.url), { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Pythona-Session': new URL(host.url).pathname.split('/')[1] },
+      body: JSON.stringify({ action, payload }),
+    });
+    return response.json();
+  };
+  const workspace = (await request('bootstrap')).result.workspace.id;
+  const previous = await request('run.status', { workspace });
+  await writeFile(join(host.documents, 'Project One', 'main.py'), 'print(input("Current: "))\n');
+  let starting = false;
+  let released = false;
+  let freshReads = 0;
+  let releaseStale: (() => Promise<void>) | undefined;
+  let received!: () => void;
+  const held = new Promise<void>(resolve => { received = resolve; });
+  await page.route('**/api', async route => {
+    const action = route.request().postDataJSON()?.action;
+    if (action === 'run.start') {
+      starting = true;
+      const response = await route.fetch();
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await held;
+      return route.fulfill({ response });
+    }
+    if (action === 'run.status' && starting && !releaseStale) {
+      releaseStale = () => route.fulfill({ json: previous });
+      received();
+      return;
+    }
+    if (action === 'run.status' && released) freshReads++;
+    return route.continue();
+  });
+  await page.locator('.editor-actions .codicon-play').click();
+  await expect(page.locator('.editor-actions .codicon-debug-stop')).toBeVisible();
+  released = true;
+  await releaseStale!();
+  await expect.poll(() => freshReads).toBeGreaterThan(0);
+  const input = pythonInput(page);
+  await input.fill('current input');
+  await input.press('Enter');
+  await expect(pythonOutput(page)).toContainText('Current: current input');
+  await expect(pythonOutput(page)).toContainText('exit code 0');
+});
+
+test('running Python survives a page reload and must stop before closing the folder', async ({ page, host }) => {
+  await openPythonWorkspace(page, host, 'print("waiting run")\ninput("Continue: ")\n');
+  await page.locator('.editor-actions .codicon-play').click();
+  await expect(pythonInput(page)).toBeEditable();
+  await page.reload();
+  await ready(page);
+  await expect(pythonInput(page)).toBeVisible();
+  await expect(pythonInput(page)).toBeEditable();
+  await expect(pythonInput(page)).not.toBeFocused();
+  await page.evaluate(() => { void (window as any).pythonaWorkbench.executeCommand('pythona.closeFolder'); });
+  await expect(page.getByText('Stop the running Python file before leaving this workspace?', { exact: true })).toBeVisible();
+  await page.locator('.monaco-dialog-box').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByText('Python: waiting for input', { exact: true })).toBeVisible();
+  await page.evaluate(() => { void (window as any).pythonaWorkbench.executeCommand('pythona.closeFolder'); });
+  await Promise.all([
+    page.waitForEvent('load'),
+    page.locator('.monaco-dialog-box').getByRole('button', { name: 'Stop Python', exact: true }).click(),
+  ]);
+  await ready(page);
+  await expect(page.locator('.editor-actions .codicon-debug-stop')).toHaveCount(0);
+});
+
 for (const locale of [
   { input: 'en-US', code: 'en', menu: 'File', title: 'Open Folder', open: 'Open This Folder' },
   { input: 'zh_CN', code: 'zh-Hans', menu: '文件', title: '打开文件夹', open: '打开此文件夹' },

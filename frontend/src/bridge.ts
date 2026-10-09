@@ -79,7 +79,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') window.pythonaConnection.resume();
 });
 
-const repeatableReads = new Set(['bootstrap', 'folders.list', 'storage.read', 'fs.stat', 'fs.list', 'fs.read']);
+const repeatableReads = new Set(['bootstrap', 'folders.list', 'storage.read', 'fs.stat', 'fs.list', 'fs.read', 'run.status']);
 
 function cancelled(): Error {
   const error = new Error('Canceled');

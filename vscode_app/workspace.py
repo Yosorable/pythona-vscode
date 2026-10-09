@@ -9,16 +9,18 @@ import threading
 
 from .filesystem import MAX_FILE_BYTES, RootedFiles, WorkspaceError, parts, revision
 from .preferences import Preferences
+from .execution import PythonRunner
 
 
 class WorkspaceApp:
     def __init__(self, documents, state_path, *, language="en"):
         self.documents_path = Path(documents).resolve(strict=True)
         self.documents = RootedFiles(self.documents_path)
-        self.state_path = Path(state_path)
+        self.state_path = Path(state_path).absolute()
         self.language = language
         self.closed = threading.Event()
         self.lock = threading.RLock()
+        self.runner = PythonRunner()
         self.preferences = Preferences(self.state_path.parent)
         self.files = None
         self.workspace = None
@@ -50,6 +52,7 @@ class WorkspaceApp:
         temporary.replace(self.state_path)
 
     def open_workspace(self, path, *, persist=True):
+        self.runner.require_idle()
         segments = parts(path)
         if not segments or segments[0] == ".Trash":
             raise WorkspaceError("NoPermissions", "Choose a project folder inside Documents.")
@@ -65,6 +68,7 @@ class WorkspaceApp:
             raise
         previous = self.files
         self.files, self.workspace, self.recent = files, workspace, recent
+        self.runner.clear()
         if previous:
             previous.close()
         return self.workspace
@@ -136,7 +140,9 @@ class WorkspaceApp:
         if action == "workspace.open":
             return self.open_workspace(payload.get("path"))
         if action == "workspace.close":
+            self.runner.require_idle()
             self._persist(None, self.recent)
+            self.runner.clear()
             if self.files:
                 self.files.close()
             self.files = self.workspace = None
@@ -144,8 +150,16 @@ class WorkspaceApp:
         if action in ("storage.read", "storage.update"):
             return self._storage(action, payload)
         if action == "host.close":
+            self.runner.require_idle()
             self.closed.set()
             return None
+        if action.startswith("run."):
+            if not self.workspace or payload.get("workspace") != self.workspace["id"]:
+                raise WorkspaceError("Unavailable", "This workspace is no longer open.")
+            if action == "run.start":
+                return self.runner.start(self.files, self.workspace,
+                                         self.documents_path / self.workspace["path"], payload)
+            return self.runner.dispatch(action, payload)
         if action.startswith("fs."):
             if not self.workspace or payload.get("workspace") != self.workspace["id"]:
                 raise WorkspaceError("Unavailable", "This workspace is no longer open.")
@@ -195,6 +209,7 @@ class WorkspaceApp:
                 raise WorkspaceError(code, error.strerror or "The file operation failed.") from None
 
     def close(self):
+        self.runner.close()
         self.closed.set()
         with self.lock:
             if self.files:

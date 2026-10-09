@@ -10,6 +10,13 @@ body {
   overscroll-behavior: none;
 }
 
+/* UIKit already sizes this viewport above the keyboard. Keep WebKit's input
+   reveal scrolling from panning the whole workbench a second time. */
+.pythona-webview #workbench {
+  position: fixed;
+  inset: 0;
+}
+
 #startup {
   position: absolute;
   inset: 0;
@@ -43,4 +50,61 @@ body {
 /* An open menu must stay opaque even if WebKit has not reported window focus. */
 .pythona-webview .monaco-workbench .part.titlebar.inactive:has(.menubar-menu-button.open) > .titlebar-container {
   opacity: 1;
+}
+
+.python-console {
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.python-console-output {
+  flex: 1;
+  min-height: 0;
+}
+
+.python-console-input {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.python-console-input input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  font: inherit;
+  border-radius: 0;
+}
+
+.python-console-input input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.python-console-input input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.python-console-input button {
+  padding: 6px 12px;
+  border: 0;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  font: inherit;
+  cursor: pointer;
+}
+
+.python-console-input button:hover:enabled {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.python-console-input button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
