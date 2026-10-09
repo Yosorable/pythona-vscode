@@ -3550,6 +3550,34 @@ License: MIT
 License: MIT
 
 ========================================================================
+@codingame/monaco-vscode-language-pack-de 37.3.8
+License: MIT
+
+========================================================================
+@codingame/monaco-vscode-language-pack-es 37.3.8
+License: MIT
+
+========================================================================
+@codingame/monaco-vscode-language-pack-fr 37.3.8
+License: MIT
+
+========================================================================
+@codingame/monaco-vscode-language-pack-ja 37.3.8
+License: MIT
+
+========================================================================
+@codingame/monaco-vscode-language-pack-ko 37.3.8
+License: MIT
+
+========================================================================
+@codingame/monaco-vscode-language-pack-pt-br 37.3.8
+License: MIT
+
+========================================================================
+@codingame/monaco-vscode-language-pack-ru 37.3.8
+License: MIT
+
+========================================================================
 @codingame/monaco-vscode-language-pack-zh-hans 37.3.8
 License: MIT
 

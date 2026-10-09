@@ -120,6 +120,53 @@ async function editorPoint(page: Page, index = 0) {
   return { x: area.x + Math.min(area.width / 2, 130), y: area.y + 10 };
 }
 
+for (const locale of [
+  { input: 'en-US', code: 'en', menu: 'File', title: 'Open Folder', open: 'Open This Folder' },
+  { input: 'zh_CN', code: 'zh-Hans', menu: '文件', title: '打开文件夹', open: '打开此文件夹' },
+  { input: 'zh-HK', code: 'zh-Hant', menu: '檔案', title: '開啟資料夾', open: '開啟此資料夾' },
+  { input: 'de-DE', code: 'de', menu: 'Datei', title: 'Ordner öffnen', open: 'Diesen Ordner öffnen' },
+  { input: 'fr-CA', code: 'fr', menu: 'Fichier', title: 'Ouvrir un dossier', open: 'Ouvrir ce dossier' },
+  { input: 'es-MX', code: 'es', menu: 'Archivo', title: 'Abrir carpeta', open: 'Abrir esta carpeta' },
+  { input: 'ru-RU', code: 'ru', menu: 'Файл', title: 'Открыть папку', open: 'Открыть эту папку' },
+  { input: 'ja-JP', code: 'ja', menu: 'ファイル', title: 'フォルダーを開く', open: 'このフォルダーを開く' },
+  { input: 'ko-KR', code: 'ko', menu: '파일', title: '폴더 열기', open: '이 폴더 열기' },
+  { input: 'pt-BR', code: 'pt-BR', menu: 'Arquivo', title: 'Abrir Pasta', open: 'Abrir Esta Pasta' },
+  { input: 'it-IT', code: 'en', menu: 'File', title: 'Open Folder', open: 'Open This Folder' },
+]) {
+  test(`application language ${locale.input} localizes the workbench and folder picker`, async ({ page, host }) => {
+    const languageRequests = new Set<string>();
+    page.on('request', request => {
+      const file = new URL(request.url()).pathname.split('/').pop()!;
+      if (file.startsWith('monaco-vscode-language-pack-') && file.endsWith('.js')) languageRequests.add(file);
+    });
+    // The native host supplies its application language in the bootstrap response.
+    await page.route('**/api', async route => {
+      if (route.request().postDataJSON()?.action !== 'bootstrap') return route.continue();
+      const response = await route.fetch();
+      const payload = await response.json();
+      payload.result.language = locale.input;
+      await route.fulfill({ response, json: payload });
+    });
+    await page.goto(host.url);
+    await ready(page);
+    await expect(page.locator('html')).toHaveAttribute('lang', locale.code);
+    await expect(page.locator('.menubar-menu-button').first()).toContainText(locale.menu);
+    await startPicker(page);
+    await expect(page.locator('.quick-input-widget:visible .quick-input-title')).toHaveText(locale.title);
+    await page.locator('.quick-input-list').getByText('Project One', { exact: true }).click();
+    await Promise.all([
+      page.waitForEvent('load'),
+      page.locator('.quick-input-list').getByText(locale.open, { exact: true }).click(),
+    ]);
+    await ready(page);
+    await expect(page.locator('.menubar-menu-button').first()).toContainText(locale.menu);
+    expect(languageRequests.size).toBe(locale.code === 'en' ? 0 : 1);
+    if (locale.code !== 'en') {
+      expect([...languageRequests][0]).toContain(`monaco-vscode-language-pack-${locale.code.toLowerCase()}-`);
+    }
+  });
+}
+
 test('native input activation keeps the tapped editor and ignores stale callbacks', async ({ page, host }) => {
   await recordNativeInput(page);
   await page.goto(host.url);

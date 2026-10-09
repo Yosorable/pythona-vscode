@@ -1,7 +1,19 @@
 import { call, type Bootstrap } from './bridge';
 import { installEditorInput } from './editorInput';
-import { languageCode, setLanguage, t } from './strings';
+import { languageCode, setLanguage, t, type LanguageCode } from './strings';
 import './style.css';
+
+const languagePacks: Record<Exclude<LanguageCode, 'en'>, () => Promise<unknown>> = {
+  de: () => import('@codingame/monaco-vscode-language-pack-de'),
+  es: () => import('@codingame/monaco-vscode-language-pack-es'),
+  fr: () => import('@codingame/monaco-vscode-language-pack-fr'),
+  ja: () => import('@codingame/monaco-vscode-language-pack-ja'),
+  ko: () => import('@codingame/monaco-vscode-language-pack-ko'),
+  'pt-BR': () => import('@codingame/monaco-vscode-language-pack-pt-br'),
+  ru: () => import('@codingame/monaco-vscode-language-pack-ru'),
+  'zh-Hans': () => import('@codingame/monaco-vscode-language-pack-zh-hans'),
+  'zh-Hant': () => import('@codingame/monaco-vscode-language-pack-zh-hant'),
+};
 
 declare global {
   interface Window {
@@ -31,14 +43,11 @@ window.pythonaWorkbench = {
 
 try {
   const bootstrap = await call<Bootstrap>('bootstrap');
-  setLanguage(bootstrap.language);
-  document.documentElement.lang = languageCode(bootstrap.language);
+  const language = languageCode(bootstrap.language);
+  setLanguage(language);
+  document.documentElement.lang = language;
   document.querySelector('#startup')!.textContent = t('opening');
-  if (languageCode(bootstrap.language) === 'zh-Hans') {
-    await import('@codingame/monaco-vscode-language-pack-zh-hans');
-  } else if (languageCode(bootstrap.language) === 'zh-Hant') {
-    await import('@codingame/monaco-vscode-language-pack-zh-hant');
-  }
+  if (language !== 'en') await languagePacks[language]();
   const { start } = await import('./workbench');
   await start(bootstrap);
   document.querySelector('#startup')?.remove();

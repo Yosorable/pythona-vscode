@@ -19,7 +19,8 @@ This is an independent open-source project, not a Microsoft product.
 - Save, discard, or cancel when switching or closing a workspace with unsaved edits.
 - Reopen the last workspace and retain a list of recently opened projects.
 - Retain user settings and the selected color theme across launches.
-- English, Simplified Chinese, and Traditional Chinese, following Pythona's language.
+- English, Simplified Chinese, Traditional Chinese, German, French, Spanish,
+  Russian, Japanese, Korean, and Brazilian Portuguese, following Pythona's language.
 - A keyboard-sized native viewport, theme-matched startup colors, and a readiness
   handshake that waits for theme loading and layout restoration before showing the workbench.
 
@@ -123,6 +124,11 @@ HTML, and workbench use the last confirmed theme's colors from the first frame,
 including light themes. Theme previews update the current surface, but only confirmed
 choices are saved for the next launch. Application defaults do not overwrite user settings.
 
+The host reads Pythona's preferred application language at startup. Regional variants
+use the matching bundled language; Portuguese locales use Brazilian Portuguese,
+and unsupported languages fall back to English. Language packs are included in full
+for offline use. Only the current language pack is loaded, before the workbench starts.
+
 A short tap in the code area activates the current web view's native keyboard
 responder, then focuses the tapped editor through a public WebKit JavaScript call.
 This preserves Monaco's clicked position and works with split editors. Dragging,
@@ -154,6 +160,8 @@ projects and cover actual saves, workspace switching, dirty-file choices, split
 editors, menu actions, nested-file search, offline loading, delayed theme loading,
 theme persistence, dark/light pre-JavaScript backgrounds, and connection recovery
 with dirty editors and lost save responses.
+Language checks cover localized menus and folder selection, regional variants,
+English fallback, and loading only the selected language pack across workspace reloads.
 Native-input browser checks cover tap targeting, dragging, long presses, and delayed
 callbacks while switching editors or using the command palette.
 Python checks cover filesystem boundaries, symlinks, conflicting writes, persistence,
