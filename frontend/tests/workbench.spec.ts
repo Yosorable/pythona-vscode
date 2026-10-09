@@ -201,6 +201,63 @@ test('user settings and custom startup colors are not overwritten on reload', as
   expect((await savedPreferences(host)).settings).toBe(saved);
 });
 
+test('foreground recovery keeps dirty editors and resumes opening and saving files', async ({ page, host }) => {
+  await page.goto(host.url);
+  await ready(page);
+  await startPicker(page);
+  await choose(page, 'Project One');
+  await page.getByText('main.py', { exact: true }).dblclick();
+  await command(page, 'cursorBottom');
+  await command(page, 'type', { text: '# kept across background\n' });
+  const documentID = await page.evaluate(() => ((window as any).resumeDocument = crypto.randomUUID()));
+  let offline = true;
+  let checks = 0;
+  await page.route('**/health', async route => {
+    checks++;
+    if (offline) await route.fulfill({ status: 503, body: '' });
+    else await route.continue();
+  });
+  await page.route('**/api', route => offline ? route.abort('failed') : route.continue());
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    (window as any).pythonaConnection.resume();
+    void (window as any).pythonaWorkbench.executeCommand('_workbench.open', {
+      scheme: 'file', path: '/Documents/Project One/src/你好 🐍.py',
+    });
+  });
+  await expect.poll(() => checks).toBeGreaterThan(0);
+  offline = false;
+  await expect(page.locator('.tabs-container')).toContainText('你好 🐍.py');
+  await command(page, '_workbench.open', { scheme: 'file', path: '/Documents/Project One/main.py' });
+  await command(page, 'workbench.action.files.save');
+  await expect.poll(() => readFile(join(host.documents, 'Project One/main.py'), 'utf8')).toContain('# kept across background');
+  expect(await page.evaluate(() => (window as any).resumeDocument)).toBe(documentID);
+});
+
+test('a lost save reply is not blindly replayed after reconnection', async ({ page, host }) => {
+  await page.goto(host.url);
+  await ready(page);
+  await startPicker(page);
+  await choose(page, 'Project One');
+  await page.getByText('main.py', { exact: true }).dblclick();
+  await command(page, 'cursorBottom');
+  await command(page, 'type', { text: '# save reply lost\n' });
+  let writes = 0;
+  await page.route('**/api', async route => {
+    if (route.request().postDataJSON()?.action !== 'fs.write') return route.continue();
+    writes++;
+    await route.fetch();
+    await route.abort('failed');
+  });
+  await command(page, 'workbench.action.files.save').catch(() => {});
+  await expect(page.locator('.notifications-toasts')).toContainText('Failed to save');
+  expect(await readFile(join(host.documents, 'Project One/main.py'), 'utf8')).toContain('# save reply lost');
+  expect(writes).toBe(1);
+  await page.evaluate(() => { void (window as any).pythonaWorkbench.requestClose(); });
+  await expect(page.getByText('Save your changes before leaving this workspace?')).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+});
+
 test('opens a selected workspace, edits Unicode, saves, and restores it', async ({ page, host }) => {
   const errors: string[] = [];
   const external: string[] = [];

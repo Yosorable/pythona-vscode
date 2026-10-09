@@ -2,6 +2,7 @@ from http.client import HTTPConnection
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 from vscode_app.server import LocalServer, MAX_REQUEST_BYTES
@@ -95,6 +96,56 @@ class ServerTests(unittest.TestCase):
     def test_shutdown_joins_the_http_thread(self):
         self.assertTrue(self.server.thread.is_alive())
         self.server.close()
+        self.assertFalse(self.server.thread.is_alive())
+        self.assertFalse(self.server.maintenance_thread.is_alive())
+
+    def test_pause_and_resume_keep_the_origin_session_and_workspace(self):
+        workspace = self.app.dispatch("workspace.open", {"path": "Project"})
+        url, token = self.server.url, self.server.token
+        self.server.pause()
+        self.assertFalse(self.server.thread.is_alive())
+        self.assertFalse(self.app.closed.is_set())
+        self.server.resume()
+        self.assertEqual(self.server.url, url)
+        self.assertEqual(self.server.token, token)
+        self.assertEqual(self.app.workspace, workspace)
+        self.assertEqual(self.request("GET", self.server.prefix + "health")[2], token.encode())
+        self.assertEqual(json.loads(self.api("bootstrap")[2])["result"]["workspace"], workspace)
+
+    def test_resume_replaces_a_live_listener_that_does_not_serve_health(self):
+        original_thread = self.server.thread
+        handler = self.server.http.RequestHandlerClass
+
+        class UnhealthyHandler(handler):
+            def do_GET(self):
+                self._send(503)
+
+        self.server.http.RequestHandlerClass = UnhealthyHandler
+        self.assertTrue(original_thread.is_alive())
+        self.server.resume()
+        self.assertFalse(original_thread.is_alive())
+        self.assertEqual(self.request("GET", self.server.prefix + "health")[0], 200)
+
+    def test_resume_replaces_an_invalidated_socket(self):
+        url = self.server.url
+        self.server.http.socket.close()
+        self.server.resume()
+        self.assertEqual(self.server.url, url)
+        self.assertEqual(self.request("GET", self.server.prefix)[0], 200)
+
+    def test_lifecycle_requests_are_async_and_close_prevents_restart(self):
+        self.server.set_active(False)
+        deadline = time.monotonic() + 3
+        while self.server.thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertFalse(self.server.thread.is_alive())
+        self.server.set_active(True)
+        while not self.server._healthy() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.server._healthy())
+        self.server.close()
+        self.server.set_active(True)
+        self.server.resume()
         self.assertFalse(self.server.thread.is_alive())
 
 

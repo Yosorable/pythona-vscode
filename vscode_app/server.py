@@ -1,5 +1,7 @@
 """Serve the bundled workbench and its workspace API on loopback only."""
 
+from contextlib import suppress
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
@@ -30,20 +32,105 @@ class LocalServer:
         if not (self.bundle / "index.html").is_file():
             raise RuntimeError("Missing frontend/dist. Build the frontend before running this project.")
         self.token = secrets.token_urlsafe(32)
-        self.http = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-        self.http.session = self
-        self.port = self.http.server_port
         self.prefix = f"/{self.token}/"
+        self.port = port
+        self.lock = threading.RLock()
+        self.closed = False
+        self._listen()
+        self.active = True
+        self.wake = threading.Event()
+        self.finished = threading.Event()
+        self.maintenance_thread = threading.Thread(target=self._maintain, name="PythonaVSCodeLifecycle")
+        self.maintenance_thread.start()
+
+    def _listen(self):
+        self.http = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
+        self.http.session = self
+        self.http.timeout = 0.05
+        self.http.socket.settimeout(0.05)
+        self.port = self.http.server_port
         self.origin = f"http://127.0.0.1:{self.port}"
         self.url = self.origin + self.prefix
-        self.thread = threading.Thread(target=self.http.serve_forever,
-                                       kwargs={"poll_interval": 0.05}, name="PythonaVSCodeHTTP")
+        self.stopping = threading.Event()
+        http, stopping = self.http, self.stopping
+
+        def serve():
+            try:
+                while not stopping.is_set():
+                    http.handle_request()
+            except (OSError, ValueError):
+                # A suspended iOS process can resume with an invalid listening socket.
+                pass
+
+        self.thread = threading.Thread(target=serve, name="PythonaVSCodeHTTP")
         self.thread.start()
 
+    def _stop_listener(self):
+        self.stopping.set()
+        self.thread.join(timeout=1)
+        with suppress(OSError):
+            self.http.server_close()
+        if self.thread.is_alive():
+            raise RuntimeError("The local HTTP listener did not stop.")
+
+    def _healthy(self):
+        if self.stopping.is_set() or not self.thread.is_alive():
+            return False
+        connection = HTTPConnection("127.0.0.1", self.port, timeout=0.5)
+        try:
+            connection.request("GET", self.prefix + "health")
+            response = connection.getresponse()
+            return response.status == 200 and response.read(128) == self.token.encode("ascii")
+        except (OSError, HTTPException, ValueError):
+            return False
+        finally:
+            connection.close()
+
+    def pause(self):
+        """Release the listener before suspension; keep the workspace and origin."""
+        with self.lock:
+            if not self.closed:
+                self._stop_listener()
+
+    def resume(self):
+        """Check actual HTTP responses and rebind the same URL when needed."""
+        with self.lock:
+            if self.closed:
+                return
+            if not self._healthy():
+                self._stop_listener()
+                self._listen()
+
+    def set_active(self, active):
+        """Queue UIKit lifecycle notifications without blocking the main thread."""
+        self.active = active
+        self.wake.set()
+
+    def _maintain(self):
+        retry = False
+        while not self.finished.is_set():
+            self.wake.wait(0.5 if retry else None)
+            self.wake.clear()
+            if self.finished.is_set():
+                return
+            try:
+                if self.active:
+                    self.resume()
+                else:
+                    self.pause()
+                retry = False
+            except (OSError, RuntimeError):
+                # A previous socket may take a moment to release its port.
+                retry = self.active
+
     def close(self):
-        self.http.shutdown()
-        self.http.server_close()
-        self.thread.join(timeout=5)
+        self.finished.set()
+        self.wake.set()
+        with self.lock:
+            if not self.closed:
+                self.closed = True
+                self._stop_listener()
+        self.maintenance_thread.join()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -97,6 +184,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route = self._route()
         if route is None:
+            return
+        if route == "health":
+            self._send(200, self.server.session.token.encode("ascii"))
             return
         try:
             relative = unquote(route, errors="strict") or "index.html"

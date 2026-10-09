@@ -15,6 +15,9 @@ Read README.md for the architecture, runtime limits, and validation commands.
   for UIKit calls and explicitly close the HTTP server, descriptors, and WebKit handlers.
 - Keep the server loopback-only, with session, Host, and Origin validation.
   A browser preview uses temporary files unless `--documents` is explicitly supplied.
+- Recover the HTTP listener at the same origin/session after background suspension.
+  Check actual responses off the main thread, preserve the live page and dirty edits,
+  and never automatically replay a mutation after an ambiguous connection failure.
 - Keep the web view transparent until the frontend readiness message arrives.
   Wait for theme loading and layout restoration, including on workspace reload.
   Use the saved theme for native, HTML, and initial workbench colors; preserve user

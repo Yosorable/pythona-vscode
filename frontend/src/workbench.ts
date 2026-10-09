@@ -235,7 +235,10 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
   dialogs.pickWorkspaceAndOpen = chooseFolder;
   const host = await getService(IHostService);
   host.close = closeWindow;
-  window.pythonaWorkbench.requestClose = closeWindow;
+  window.pythonaWorkbench.requestClose = async () => {
+    try { await closeWindow(); }
+    catch (error) { await api.window.showErrorMessage(error instanceof Error ? error.message : String(error)); }
+  };
   window.pythonaWorkbench.executeCommand = (command, ...args) => Promise.resolve(api.commands.executeCommand(command, ...args));
 
   await api.commands.executeCommand('workbench.view.explorer');

@@ -39,6 +39,18 @@ def presenter():
 
 class WorkbenchHandler(NSObject, auto_rename=True):
     @objc_method
+    def pause_(self, notification):
+        host = self.host_ref()
+        if host:
+            host.server.set_active(False)
+
+    @objc_method
+    def resume_(self, notification):
+        host = self.host_ref()
+        if host:
+            host.resume()
+
+    @objc_method
     def userContentController_didReceiveScriptMessage_(self, controller, message):
         host = self.host_ref()
         if not (host and host.webview is not None and value(message.frameInfo, "isMainFrame")):
@@ -90,6 +102,7 @@ class WorkbenchHandler(NSObject, auto_rename=True):
         if host is None:
             return
         if host.loaded:
+            host.resume()
             host.webview.evaluateJavaScript_completionHandler_(
                 "window.pythonaWorkbench?.requestClose()", None)
         else:
@@ -130,6 +143,11 @@ class WorkbenchWindow:
         configuration.websiteDataStore = value(ObjCClass("WKWebsiteDataStore"), "nonPersistentDataStore")
         self.handler = WorkbenchHandler.alloc().init()
         self.handler.host_ref = weakref.ref(self)
+        notifications = value(ObjCClass("NSNotificationCenter"), "defaultCenter")
+        notifications.addObserver_selector_name_object_(
+            self.handler, SEL("pause:"), "UIApplicationDidEnterBackgroundNotification", None)
+        for name in ("UIApplicationWillEnterForegroundNotification", "UIApplicationDidBecomeActiveNotification"):
+            notifications.addObserver_selector_name_object_(self.handler, SEL("resume:"), name, None)
         configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchReady")
         configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchTheme")
         self.webview = ObjCClass("WKWebView").alloc().initWithFrame_configuration_(view.bounds, configuration)
@@ -165,6 +183,12 @@ class WorkbenchWindow:
         self.webview.loadRequest_(ObjCClass("NSURLRequest").requestWithURL_(url))
         presenter().presentViewController_animated_completion_(self.controller, True, None)
 
+    def resume(self):
+        self.server.set_active(True)
+        if self.webview:
+            # Keep the live document and dirty editors while its HTTP origin recovers.
+            self.webview.evaluateJavaScript_completionHandler_("window.pythonaConnection?.resume()", None)
+
     def apply_theme(self, theme):
         def color(key):
             hex_value = theme["colors"][key]
@@ -182,6 +206,8 @@ class WorkbenchWindow:
             self.close_button.tintColor = color("foreground")
 
     def close(self):
+        if self.handler:
+            value(ObjCClass("NSNotificationCenter"), "defaultCenter").removeObserver_(self.handler)
         if self.webview:
             self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchReady")
             self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchTheme")

@@ -123,6 +123,14 @@ HTML, and workbench use the last confirmed theme's colors from the first frame,
 including light themes. Theme previews update the current surface, but only confirmed
 choices are saved for the next launch. Application defaults do not overwrite user settings.
 
+File operations and window-close requests use the local HTTP API. When Pythona
+enters the background, the host releases the listening socket. Foreground callbacks
+check a real HTTP response and restore the same port and session when necessary.
+The frontend waits for that connection without reloading the page, preserving its
+dirty editors. Only read requests can be retried automatically; a lost response to
+a save, rename, or deletion does not prove that the operation was never executed.
+The native **×** button also requests connection recovery before the usual save prompt.
+
 ## Validation
 
 ```sh
@@ -138,14 +146,18 @@ Local browser checks use an installed Google Chrome and Playwright WebKit with a
 iPad viewport. The tests use temporary
 projects and cover actual saves, workspace switching, dirty-file choices, split
 editors, menu actions, nested-file search, offline loading, delayed theme loading,
-theme persistence, and dark/light pre-JavaScript backgrounds.
+theme persistence, dark/light pre-JavaScript backgrounds, and connection recovery
+with dirty editors and lost save responses.
 Python checks cover filesystem boundaries, symlinks, conflicting writes, persistence,
-failed preference writes, HTTP request validation, and shutdown.
+failed preference writes, HTTP request validation, listener recovery, and shutdown.
 
 Run **`tests/native_smoke.py`** inside Pythona to exercise the real UIKit container,
 WebKit readiness with delayed dark/light themes, matching native colors, Unicode saves,
 split editors, and menu hit testing. It uses temporary files, closes
 its own window/server, and writes a report to `.local/native-smoke.json`.
+**`tests/native_resume.py`** deliberately stops the listener while keeping the actual
+WebView and dirty edits alive. It exercises the lifecycle callbacks and native **×**
+button, including cancel and save, and writes `.local/native-resume.json`.
 Automated smoke tests do not substitute for hands-on Chinese IME, touch-selection,
 and physical keyboard checks on an iPad.
 
