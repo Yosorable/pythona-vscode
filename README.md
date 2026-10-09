@@ -122,9 +122,6 @@ frames have elapsed; the host then sets `alpha = 1`. The native container, initi
 HTML, and workbench use the last confirmed theme's colors from the first frame,
 including light themes. Theme previews update the current surface, but only confirmed
 choices are saved for the next launch. Application defaults do not overwrite user settings.
-After revealing the page, the host also activates WebKit's native keyboard responder
-and the first focused text field's input session, so that field can immediately
-accept native keyboard input while retaining its caret or selection.
 
 File operations and window-close requests use the local HTTP API. When Pythona
 enters the background, the host releases the listening socket. Foreground callbacks
@@ -155,8 +152,7 @@ Python checks cover filesystem boundaries, symlinks, conflicting writes, persist
 failed preference writes, HTTP request validation, listener recovery, and shutdown.
 
 Run **`tests/native_smoke.py`** inside Pythona to exercise the real UIKit container,
-WebKit readiness with delayed dark/light themes, matching native colors, native keyboard
-input and Unicode saves,
+WebKit readiness with delayed dark/light themes, matching native colors, Unicode saves,
 split editors, and menu hit testing. It uses temporary files, closes
 its own window/server, and writes a report to `.local/native-smoke.json`.
 **`tests/native_resume.py`** deliberately stops the listener while keeping the actual

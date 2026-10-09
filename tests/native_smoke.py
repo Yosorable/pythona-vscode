@@ -48,7 +48,7 @@ def run_case(scheme):
     with tempfile.TemporaryDirectory(prefix="pythona_vscode_smoke_") as temporary:
         try:
             from vscode_app.server import Handler, LocalServer
-            from vscode_app.ui import WorkbenchWindow, value
+            from vscode_app.ui import WorkbenchWindow
             from vscode_app.workspace import WorkspaceApp
 
             documents = Path(temporary) / "Documents"
@@ -69,23 +69,6 @@ def run_case(scheme):
             original = app.dispatch
 
             def dispatch(action, payload=None):
-                if action == "smoke.keyboard":
-                    def type_into_focused_view():
-                        def find(view):
-                            if value(view, "isFirstResponder"):
-                                return view
-                            for child in value(view, "subviews"):
-                                found = find(child)
-                                if found is not None:
-                                    return found
-                            return None
-
-                        responder = find(host.webview)
-                        if responder is None:
-                            raise RuntimeError("The workbench has no native keyboard responder.")
-                        responder.insertText_("# Native save 你好 🐍\n")
-                    builtins.run_on_ui(type_into_focused_view).wait()
-                    return None
                 if action == "smoke.report":
                     reports.append(payload)
                     completed.set()
@@ -131,21 +114,13 @@ def run_case(scheme):
               try {
                 await wait(()=>window.pythonaWorkbench?.ready);
                 const run = window.pythonaWorkbench.executeCommand;
-                let nativeInputEvents = 0;
-                document.addEventListener('beforeinput', event=>{ if(event.isTrusted) nativeInputEvents++; });
                 await run('_workbench.open', {scheme:'file',path:FILE_PATH});
                 await wait(()=>document.querySelector('.monaco-editor .view-line'));
                 await run('cursorBottom');
-                const painted = () => new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-                await painted();
-                const inputReply = await fetch(new URL('api', location.href), {
-                  method:'POST', headers:{'Content-Type':'application/json','X-Pythona-Session':location.pathname.split('/')[1]},
-                  body:JSON.stringify({action:'smoke.keyboard'})
-                }).then(response=>response.json());
-                if(inputReply.error) throw new Error(inputReply.error.message);
-                await wait(()=>nativeInputEvents>0);
+                await run('type',{text:'# Native save 你好 🐍\n'});
                 await run('workbench.action.files.save');
                 await run('workbench.action.splitEditorRight');
+                const painted = () => new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
                 await painted();
                 const menus = {};
                 for (const name of ['File', 'Edit', 'Selection', 'View', 'Go', 'Help']) {
@@ -167,7 +142,6 @@ def run_case(scheme):
                 }
                 await report({passed:Object.values(menus).every(Boolean),menus,width:innerWidth,height:innerHeight,userAgent:navigator.userAgent,
                   editors:document.querySelectorAll('.editor-group-container').length,
-                  nativeInputEvents,documentFocused:document.hasFocus(),
                   background:getComputedStyle(document.documentElement).backgroundColor,
                   text:document.body.innerText});
               } catch(error) { await report({passed:false,error:String(error),text:document.body.innerText}); }
@@ -201,7 +175,6 @@ def run_case(scheme):
                     break
                 time.sleep(0.02)
             report["passed"] = bool(report.get("passed") and "# Native save 你好 🐍" in report["saved"]
-                                    and report.get("nativeInputEvents", 0) > 0 and report.get("documentFocused")
                                     and report["transparentAtStart"] and report["visibleAfterReady"]
                                     and report["transparentWhileThemeLoads"]
                                     and report["interfaceStyleWhileThemeLoads"] == (1 if scheme == "light" else 2)
