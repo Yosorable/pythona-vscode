@@ -1,4 +1,5 @@
 import { call, type Bootstrap } from './bridge';
+import { installEditorInput } from './editorInput';
 import { languageCode, setLanguage, t } from './strings';
 import './style.css';
 
@@ -7,10 +8,12 @@ declare global {
     webkit?: { messageHandlers?: {
       workbenchReady?: { postMessage(message: string): void };
       workbenchTheme?: { postMessage(message: string): void };
+      workbenchInput?: { postMessage(message: string): void };
     } };
     pythonaWorkbench: {
       ready: boolean;
       requestClose(): Promise<void>;
+      activateInput(id: string): void;
       executeCommand?(command: string, ...args: unknown[]): Promise<unknown>;
     };
   }
@@ -23,6 +26,7 @@ if (window.webkit?.messageHandlers?.workbenchReady) {
 window.pythonaWorkbench = {
   ready: false,
   requestClose: async () => { await call('host.close'); },
+  activateInput: installEditorInput(),
 };
 
 try {

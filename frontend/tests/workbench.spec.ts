@@ -98,6 +98,80 @@ async function waitForPaints(page: Page) {
   });
 }
 
+async function recordNativeInput(page: Page) {
+  await page.addInitScript(() => {
+    // Match WKWebView's textarea input path when this fixture runs in Chrome.
+    (window as any).EditContext = undefined;
+    (window as any).inputRequests = [];
+    (window as any).webkit = { messageHandlers: {
+      workbenchReady: { postMessage() {} },
+      workbenchInput: { postMessage(id: string) { (window as any).inputRequests.push(id); } },
+    } };
+  });
+}
+
+async function inputRequests(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as any).inputRequests);
+}
+
+async function editorPoint(page: Page, index = 0) {
+  const area = await page.locator('.editor-group-container .monaco-editor .view-lines').nth(index).boundingBox();
+  if (!area) throw new Error('The editor is not visible');
+  return { x: area.x + Math.min(area.width / 2, 130), y: area.y + 10 };
+}
+
+test('native input activation keeps the tapped editor and ignores stale callbacks', async ({ page, host }) => {
+  await recordNativeInput(page);
+  await page.goto(host.url);
+  await ready(page);
+  await startPicker(page);
+  await choose(page, 'Project One');
+  await command(page, '_workbench.open', { scheme: 'file', path: '/Documents/Project One/main.py' });
+  await command(page, 'workbench.action.splitEditorRight');
+  await expect(page.locator('.editor-group-container .monaco-editor')).toHaveCount(2);
+  expect(await inputRequests(page)).toEqual([]);
+  for (const index of [0, 1]) {
+    const point = await editorPoint(page, index);
+    await page.mouse.click(point.x, point.y);
+    await expect.poll(async () => (await inputRequests(page)).length).toBe(index + 1);
+  }
+  const [oldRequest, latestRequest] = await inputRequests(page);
+  await page.evaluate(id => (window as any).pythonaWorkbench.activateInput(id), oldRequest);
+  await expect(page.locator('.editor-group-container .monaco-editor textarea.inputarea').nth(1)).toBeFocused();
+  await page.evaluate(id => (window as any).pythonaWorkbench.activateInput(id), latestRequest);
+  await page.keyboard.insertText('native_input');
+  await command(page, 'workbench.action.files.save');
+  await expect.poll(() => readFile(join(host.documents, 'Project One/main.py'), 'utf8')).toContain('native_input');
+});
+
+test('native input activation leaves dragging, long presses, and newer quick inputs alone', async ({ page, host }) => {
+  await recordNativeInput(page);
+  await page.goto(host.url);
+  await ready(page);
+  await command(page, '_workbench.open', { scheme: 'vscode-userdata', path: '/User/settings.json' });
+  const point = await editorPoint(page);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x + 90, point.y + 20, { steps: 8 });
+  await page.mouse.up();
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.waitForTimeout(550);
+  await page.mouse.up();
+  expect(await inputRequests(page)).toEqual([]);
+  await page.mouse.click(point.x, point.y);
+  await expect.poll(async () => (await inputRequests(page)).length).toBe(1);
+  const [request] = await inputRequests(page);
+  await command(page, 'workbench.action.showCommands');
+  const input = page.locator('.quick-input-widget:visible input');
+  await expect(input).toBeFocused();
+  await page.evaluate(id => (window as any).pythonaWorkbench.activateInput(id), request);
+  await expect(input).toBeFocused();
+  await page.keyboard.insertText('Color Theme');
+  await expect(input).toHaveValue('>Color Theme');
+  expect(await inputRequests(page)).toHaveLength(1);
+});
+
 test('cold startup stays dark and waits for a delayed theme before native readiness', async ({ page, host }) => {
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });

@@ -4,6 +4,7 @@ import builtins
 from ctypes import c_long, c_void_p
 import json
 from pathlib import Path
+import re
 import weakref
 
 from rubicon.objc import NSObject, ObjCBlock, ObjCClass, SEL, objc_method
@@ -57,6 +58,15 @@ class WorkbenchHandler(NSObject, auto_rename=True):
             return
         if str(message.name) == "workbenchReady" and str(message.body) == "ready":
             host.webview.alpha = 1
+        elif str(message.name) == "workbenchInput":
+            request = str(message.body)
+            if (host.loaded and host.webview.alpha > 0
+                    and re.fullmatch(r"[0-9a-f-]{36}:[0-9]{1,10}", request)):
+                # Activate only this web view after a real editor tap. DOM focus
+                # alone does not establish WebKit's native keyboard session.
+                host.webview.becomeFirstResponder()
+                host.webview.evaluateJavaScript_completionHandler_(
+                    f"window.pythonaWorkbench?.activateInput({json.dumps(request)})", None)
         elif str(message.name) == "workbenchTheme":
             try:
                 host.apply_theme(validate_theme(json.loads(str(message.body))))
@@ -150,6 +160,7 @@ class WorkbenchWindow:
             notifications.addObserver_selector_name_object_(self.handler, SEL("resume:"), name, None)
         configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchReady")
         configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchTheme")
+        configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchInput")
         self.webview = ObjCClass("WKWebView").alloc().initWithFrame_configuration_(view.bounds, configuration)
         self.webview.alpha = 0
         self.webview.opaque = False
@@ -211,6 +222,7 @@ class WorkbenchWindow:
         if self.webview:
             self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchReady")
             self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchTheme")
+            self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchInput")
             self.webview.navigationDelegate = None
             self.webview.stopLoading()
         if self.controller and self.controller.presentingViewController is not None:

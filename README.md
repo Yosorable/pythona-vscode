@@ -123,6 +123,12 @@ HTML, and workbench use the last confirmed theme's colors from the first frame,
 including light themes. Theme previews update the current surface, but only confirmed
 choices are saved for the next launch. Application defaults do not overwrite user settings.
 
+A short tap in the code area activates the current web view's native keyboard
+responder, then focuses the tapped editor through a public WebKit JavaScript call.
+This preserves Monaco's clicked position and works with split editors. Dragging,
+long presses, and ongoing composition do not request keyboard activation. The host
+does not force keyboard focus during startup or replace WebKit's private methods.
+
 File operations and window-close requests use the local HTTP API. When Pythona
 enters the background, the host releases the listening socket. Foreground callbacks
 check a real HTTP response and restore the same port and session when necessary.
@@ -148,6 +154,8 @@ projects and cover actual saves, workspace switching, dirty-file choices, split
 editors, menu actions, nested-file search, offline loading, delayed theme loading,
 theme persistence, dark/light pre-JavaScript backgrounds, and connection recovery
 with dirty editors and lost save responses.
+Native-input browser checks cover tap targeting, dragging, long presses, and delayed
+callbacks while switching editors or using the command palette.
 Python checks cover filesystem boundaries, symlinks, conflicting writes, persistence,
 failed preference writes, HTTP request validation, listener recovery, and shutdown.
 
@@ -160,6 +168,11 @@ WebView and dirty edits alive. It exercises the lifecycle callbacks and native *
 button, including cancel and save, and writes `.local/native-resume.json`.
 Automated smoke tests do not substitute for hands-on Chinese IME, touch-selection,
 and physical keyboard checks on an iPad.
+For native keyboard checks, reopen a previously edited workspace through `main.py`,
+tap the code area once, and type. Also check keyboard dismissal and reopening,
+scrolling before the first tap, split editors, and the command palette. Opening or
+focusing the file through native `evaluateJavaScript` before this check can change
+WebKit's input-session state and conceal startup failures.
 
 ## Storage and network behavior
 
