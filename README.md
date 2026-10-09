@@ -95,7 +95,7 @@ to the same release. Dependency overrides apply patched DOMPurify and KaTeX vers
 main.py                    Pythona entry point and browser preview
 vscode_app/
   ui.py                    UIKit / WKWebView presentation and readiness
-  server.py                Loopback static assets and JSON API
+  server.py                Loopback static assets, JSON API, and binary file transfer
   workspace.py             Workspace selection, recent folders, and state
   preferences.py           User settings and the cached startup theme
   filesystem.py            Descriptor-relative file operations and atomic saves
@@ -116,6 +116,11 @@ port on `127.0.0.1` and serves the local bundle. This supplies the origin needed
 by ES modules, workers, and WebAssembly. File requests are handled by Python
 threads and translated through a workspace filesystem provider. No code execution
 endpoint is exposed.
+
+File contents travel as HTTP byte bodies, preserving the original encoding and
+binary data without Base64. File requests retain the workspace identity and save
+options in a URL-escaped metadata header; reads return the content revision in a
+response header. Other commands use the JSON API.
 
 The native host starts WKWebView at `alpha = 0`. The frontend signals readiness
 after the selected theme has loaded, the layout has restored, and two animation
@@ -155,7 +160,7 @@ npm test
 ```
 
 Local browser checks use an installed Google Chrome and Playwright WebKit with an
-iPad viewport. The tests use temporary
+iPad viewport, plus menu checks at iPhone dimensions. The tests use temporary
 projects and cover actual saves, workspace switching, dirty-file choices, split
 editors, menu actions, nested-file search, offline loading, delayed theme loading,
 theme persistence, dark/light pre-JavaScript backgrounds, and connection recovery
@@ -169,7 +174,7 @@ failed preference writes, HTTP request validation, listener recovery, and shutdo
 
 Run **`tests/native_smoke.py`** inside Pythona to exercise the real UIKit container,
 WebKit readiness with delayed dark/light themes, matching native colors, Unicode saves,
-split editors, and menu hit testing. It uses temporary files, closes
+split editors, menu hit testing, and focus after menu taps. It uses temporary files, closes
 its own window/server, and writes a report to `.local/native-smoke.json`.
 **`tests/native_resume.py`** deliberately stops the listener while keeping the actual
 WebView and dirty edits alive. It exercises the lifecycle callbacks and native **×**

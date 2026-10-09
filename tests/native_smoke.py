@@ -123,24 +123,59 @@ def run_case(scheme):
                 const painted = () => new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
                 await painted();
                 const menus = {};
-                for (const name of ['File', 'Edit', 'Selection', 'View', 'Go', 'Help']) {
-                  const button = [...document.querySelectorAll('.menubar-menu-button')].find(item=>item.textContent===name);
-                  if (!button) throw new Error('Missing menu: '+name);
-                  for (const type of ['mousedown', 'mouseup']) {
-                    button.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,button:0}));
+                const menuFailures = {};
+                const hit = item => {
+                  const rect = item.getBoundingClientRect();
+                  return rect.width > 0 && rect.height > 0 &&
+                    item.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2));
+                };
+                let touchID = 0;
+                const press = item => {
+                  if (!item || !hit(item)) throw new Error('Menu target is not hittable: '+item?.textContent);
+                  const rect = item.getBoundingClientRect();
+                  const x = rect.x+rect.width/2, y = rect.y+rect.height/2;
+                  const target = document.elementFromPoint(x,y);
+                  const touch = new Touch({identifier:++touchID,target,clientX:x,clientY:y,pageX:x,pageY:y});
+                  for (const type of ['touchstart', 'touchend']) {
+                    const touches = type === 'touchstart' ? [touch] : [];
+                    target.dispatchEvent(new TouchEvent(type,{bubbles:true,cancelable:true,
+                      touches,targetTouches:touches,changedTouches:[touch]}));
+                  }
+                };
+                const openMenu = async name => {
+                  const buttons = [...document.querySelectorAll('.menubar-menu-button')];
+                  const button = buttons.find(item=>item.textContent===name && hit(item));
+                  if (button) {
+                    press(button);
+                  } else {
+                    press(buttons.find(item=>item.querySelector('.toolbar-toggle-more')));
+                    await painted();
+                    press([...document.querySelectorAll('.monaco-submenu-item')]
+                      .find(item=>item.querySelector('.action-label')?.textContent===name));
                   }
                   await painted();
-                  const holder = document.querySelector('.menubar-menu-items-holder');
+                  // Narrow windows nest menus; a submenu may cover its parent's other entries.
+                  const holder = [...document.querySelectorAll('.menubar-menu-items-holder')].at(-1);
                   if (!holder) throw new Error('Menu did not open: '+name);
+                  return holder;
+                };
+                for (const name of ['File', 'Edit', 'Selection', 'View', 'Go', 'Help']) {
+                  const holder = await openMenu(name);
                   const items = [...holder.querySelectorAll('.action-item')].filter(item=>item.textContent.trim());
-                  menus[name] = items.length > 0 && items.every(item=>{
-                    const rect = item.getBoundingClientRect();
-                    return item.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2));
-                  });
+                  menuFailures[name] = items.filter(item=>!hit(item)).map(item=>item.textContent.trim());
+                  menus[name] = items.length > 0 && menuFailures[name].length === 0;
                   window.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));
                   await painted();
                 }
-                await report({passed:Object.values(menus).every(Boolean),menus,width:innerWidth,height:innerHeight,userAgent:navigator.userAgent,
+                const go = await openMenu('Go');
+                press([...go.querySelectorAll('.action-menu-item')]
+                  .find(item=>item.querySelector('.action-label')?.textContent==='Go to File...'));
+                await wait(()=>document.querySelector('.quick-input-widget input')===document.activeElement);
+                await painted();
+                const menuCommandFocused = document.querySelector('.quick-input-widget input')===document.activeElement &&
+                  !document.querySelector('.menubar-menu-items-holder');
+                await report({passed:Object.values(menus).every(Boolean) && menuCommandFocused,
+                  menus,menuFailures,menuCommandFocused,width:innerWidth,height:innerHeight,userAgent:navigator.userAgent,
                   editors:document.querySelectorAll('.editor-group-container').length,
                   background:getComputedStyle(document.documentElement).backgroundColor,
                   text:document.body.innerText});

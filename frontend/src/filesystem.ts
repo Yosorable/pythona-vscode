@@ -13,7 +13,7 @@ import {
 } from '@codingame/monaco-vscode-files-service-override';
 import { Emitter, Event } from '@codingame/monaco-vscode-api/vscode/vs/base/common/event';
 import { URI } from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri';
-import { call, decodeBytes, encodeBytes, HostError, type Workspace } from './bridge';
+import { call, HostError, type Workspace } from './bridge';
 
 export function workspaceURI(workspace: Workspace): URI {
   return URI.file(`/Documents/${workspace.path}`);
@@ -54,14 +54,14 @@ export class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapab
   watch() { return { dispose() {} }; }
 
   async readFile(uri: URI): Promise<Uint8Array> {
-    const result = await this.request<{ data: string; revision: string }>('fs.read', uri);
+    const result = await this.request<{ data: Uint8Array; revision: string }>('fs.read', uri);
     this.revisions.set(uri.toString(), result.revision);
-    return decodeBytes(result.data);
+    return result.data;
   }
 
   async writeFile(uri: URI, content: Uint8Array, options: IFileWriteOptions): Promise<void> {
     const result = await this.request<{ revision: string }>('fs.write', uri, {
-      data: encodeBytes(content), create: options.create, overwrite: options.overwrite,
+      data: content, create: options.create, overwrite: options.overwrite,
       expected: this.revisions.get(uri.toString()) ?? null,
     });
     this.revisions.set(uri.toString(), result.revision);

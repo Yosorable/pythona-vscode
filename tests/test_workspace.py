@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 from pathlib import Path
@@ -35,7 +34,7 @@ class WorkspaceTests(unittest.TestCase):
         })
 
     def write(self, path, text, **options):
-        return self.fs("write", path, data=base64.b64encode(text.encode()).decode(),
+        return self.fs("write", path, data=text.encode(),
                        create=True, overwrite=True, **options)
 
     def test_starts_empty_and_opens_only_a_selected_project(self):
@@ -151,7 +150,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_existing_file_is_not_overwritten_by_create(self):
         self.open()
         with self.assertRaises(WorkspaceError):
-            self.fs("write", "main.py", data="aGVsbG8=", create=True, overwrite=False)
+            self.fs("write", "main.py", data=b"hello", create=True, overwrite=False)
         self.assertEqual((self.project / "main.py").read_text(), 'print("original")\n')
 
     def test_nonregular_files_and_large_files_are_rejected(self):
@@ -174,8 +173,8 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_malformed_requests_do_not_write_files(self):
         self.open()
-        for extra in [{"data": "!"}, {"data": "aA==", "create": "yes"},
-                      {"data": "aA==", "expected": "bad"}]:
+        for extra in [{"data": "not bytes"}, {"data": b"h", "create": "yes"},
+                      {"data": b"h", "expected": "bad"}]:
             with self.assertRaises(WorkspaceError):
                 self.fs("write", "bad.py", **extra)
         self.assertFalse((self.project / "bad.py").exists())

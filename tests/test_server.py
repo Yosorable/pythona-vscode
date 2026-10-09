@@ -1,11 +1,16 @@
 from http.client import HTTPConnection
+import hashlib
 import json
 from pathlib import Path
+import socket
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+from urllib.parse import quote
 
-from vscode_app.server import LocalServer, MAX_REQUEST_BYTES
+from vscode_app.filesystem import MAX_FILE_BYTES
+from vscode_app.server import LocalServer, MAX_FILE_REQUEST_HEADER_BYTES, MAX_REQUEST_BYTES
 from vscode_app.workspace import WorkspaceApp
 
 
@@ -28,10 +33,12 @@ class ServerTests(unittest.TestCase):
         self.app.close()
         self.temporary.cleanup()
 
-    def request(self, method, path, body=None, headers=None):
+    def request(self, method, path, body=None, headers=None, *, incomplete=False):
         connection = HTTPConnection("127.0.0.1", self.server.port, timeout=3)
         try:
             connection.request(method, path, body, headers or {})
+            if incomplete:
+                connection.sock.shutdown(socket.SHUT_WR)
             response = connection.getresponse()
             return response.status, dict(response.getheaders()), response.read()
         finally:
@@ -42,6 +49,13 @@ class ServerTests(unittest.TestCase):
             "Content-Type": "application/json", "X-Pythona-Session": self.server.token,
             "Origin": self.server.origin, **(headers or {}),
         })
+
+    def file(self, action, payload, data=b"", headers=None, **options):
+        metadata = quote(json.dumps({"action": action, "payload": payload}, ensure_ascii=False), safe="")
+        return self.request("POST", self.server.prefix + "file", data, {
+            "Content-Type": "application/octet-stream", "X-Pythona-Session": self.server.token,
+            "Origin": self.server.origin, "X-Pythona-Request": metadata, **(headers or {}),
+        }, **options)
 
     def test_bundle_supports_offline_workers_and_wasm(self):
         status, headers, body = self.request("GET", self.server.prefix)
@@ -81,10 +95,94 @@ class ServerTests(unittest.TestCase):
     def test_real_workspace_round_trip(self):
         reply = json.loads(self.api("workspace.open", {"path": "Project"})[2])
         workspace = reply["result"]["id"]
-        reply = json.loads(self.api("fs.write", {"workspace": workspace, "path": "main.py",
-                                                "data": "aGVsbG8=", "create": True, "overwrite": True})[2])
-        self.assertIn("revision", reply["result"])
-        self.assertEqual((self.documents / "Project/main.py").read_text(), "hello")
+        path = '你好 %?#& 🐍.bin'
+        for data in (b"", bytes(range(256)) * 513, b"\xff\xfe" + "你好 🐍\0".encode("utf-16-le")):
+            with self.subTest(length=len(data)):
+                reply = json.loads(self.file("fs.write", {"workspace": workspace, "path": path,
+                                                        "create": True, "overwrite": True}, data)[2])
+                revision = hashlib.sha256(data).hexdigest()
+                self.assertEqual(reply["result"]["revision"], revision)
+                self.assertEqual((self.documents / "Project" / path).read_bytes(), data)
+                status, headers, actual = self.file("fs.read", {"workspace": workspace, "path": path})
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Content-Type"], "application/octet-stream")
+                self.assertEqual(headers["Content-Length"], str(len(data)))
+                self.assertEqual(headers["X-Pythona-Revision"], revision)
+                self.assertEqual(actual, data)
+
+    def test_file_endpoint_requires_session_and_matching_origin_and_host(self):
+        workspace = self.app.open_workspace("Project")
+        payload = {"workspace": workspace["id"], "path": "main.py"}
+        for action in ("fs.read", "fs.write"):
+            for headers in [{"X-Pythona-Session": "wrong"}, {"Origin": "https://example.com"},
+                            {"Host": "attacker.example"}, {"Sec-Fetch-Site": "cross-site"},
+                            {"Content-Type": "text/plain"}, {"Transfer-Encoding": "chunked"}]:
+                with self.subTest(action=action, headers=headers):
+                    self.assertEqual(self.file(action, payload, headers=headers)[0], 403)
+        self.assertEqual((self.documents / "Project/main.py").read_text(), "print(42)\n")
+
+    def test_invalid_file_metadata_cannot_execute_other_actions_or_write_files(self):
+        workspace = self.app.open_workspace("Project")
+        payload = {"workspace": workspace["id"], "path": "main.py"}
+        invalid = ["", "%FF", "not-json", "[]", '{"action":"host.close","payload":{}}',
+                   '{"action":"fs.write","payload":{"data":"hidden"}}',
+                   "x" * (MAX_FILE_REQUEST_HEADER_BYTES + 1)]
+        for metadata in invalid:
+            with self.subTest(metadata=metadata[:80]):
+                self.assertEqual(self.file("fs.write", payload, headers={"X-Pythona-Request": metadata})[0], 400)
+        self.assertEqual(self.file("fs.read", payload, b"unexpected body")[0], 400)
+        self.assertFalse(self.app.closed.is_set())
+        self.assertEqual((self.documents / "Project/main.py").read_text(), "print(42)\n")
+
+    def test_file_requests_reject_stale_workspaces_traversal_and_symlinks(self):
+        old = self.app.open_workspace("Project")
+        outside = self.documents / "private.bin"
+        outside.write_bytes(b"private")
+        (self.documents / "Project/link.bin").symlink_to(outside)
+        for path in ("../private.bin", "/private.bin", "link.bin"):
+            for action in ("fs.read", "fs.write"):
+                payload = {"workspace": old["id"], "path": path, "create": True, "overwrite": True}
+                with self.subTest(path=path, action=action):
+                    self.assertIn("error", json.loads(self.file(action, payload)[2]))
+        (self.documents / "Other").mkdir()
+        self.app.open_workspace("Other")
+        for action in ("fs.read", "fs.write"):
+            reply = json.loads(self.file(action, {"workspace": old["id"], "path": "main.py"})[2])
+            self.assertEqual(reply["error"]["code"], "Unavailable")
+        self.assertEqual(outside.read_bytes(), b"private")
+        self.assertFalse((self.documents / "Other/main.py").exists())
+
+    def test_failed_binary_saves_preserve_existing_bytes(self):
+        workspace = self.app.open_workspace("Project")
+        payload = {"workspace": workspace["id"], "path": "main.py", "create": True, "overwrite": True}
+        revision = self.file("fs.read", payload)[1]["X-Pythona-Revision"]
+        file = self.documents / "Project/main.py"
+        file.write_bytes(b"external edit\0\xff")
+        reply = json.loads(self.file("fs.write", {**payload, "expected": revision}, b"stale")[2])
+        self.assertEqual(reply["error"]["code"], "FileWriteLocked")
+        with patch("vscode_app.filesystem.os.replace", side_effect=OSError("Failed atomic replacement")):
+            reply = json.loads(self.file("fs.write", payload, b"replacement")[2])
+        self.assertIn("error", reply)
+        self.assertEqual(self.file("fs.write", payload, b"partial", headers={"Content-Length": "100"},
+                                   incomplete=True)[0], 400)
+        self.assertEqual(file.read_bytes(), b"external edit\0\xff")
+        self.assertFalse(list(file.parent.glob(".pythona-vscode-*.tmp")))
+
+    def test_binary_file_limit_accepts_exact_boundary_and_rejects_larger_bodies(self):
+        workspace = self.app.open_workspace("Project")
+        payload = {"workspace": workspace["id"], "path": "large.bin", "create": True, "overwrite": True}
+        data = b"\0" * MAX_FILE_BYTES
+        reply = json.loads(self.file("fs.write", payload, data)[2])
+        self.assertIn("result", reply)
+        self.assertEqual(self.file("fs.read", payload)[2], data)
+        self.assertEqual(self.file("fs.write", payload, headers={"Content-Length": str(MAX_FILE_BYTES + 1)})[0], 413)
+        self.assertEqual((self.documents / "Project/large.bin").read_bytes(), data)
+
+    def test_json_api_does_not_accept_file_contents(self):
+        workspace = self.app.open_workspace("Project")
+        for action in ("fs.read", "fs.write"):
+            reply = json.loads(self.api(action, {"workspace": workspace["id"], "path": "main.py", "data": "text"})[2])
+            self.assertEqual(reply["error"]["code"], "InvalidRequest")
 
     def test_oversized_requests_are_rejected_before_reading_the_body(self):
         status, _, _ = self.request("POST", self.server.prefix + "api", b"", {

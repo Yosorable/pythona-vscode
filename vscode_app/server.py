@@ -15,7 +15,8 @@ from .preferences import startup_style
 
 
 BUNDLE = Path(__file__).resolve().parents[1] / "frontend" / "dist"
-MAX_REQUEST_BYTES = ((MAX_FILE_BYTES + 2) // 3 * 4) + 65536
+MAX_REQUEST_BYTES = MAX_FILE_BYTES
+MAX_FILE_REQUEST_HEADER_BYTES = 16384
 CSP = (
     "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
     "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
@@ -145,10 +146,12 @@ class Handler(BaseHTTPRequestHandler):
         # Request paths contain the session capability and workspace filenames.
         pass
 
-    def _send(self, status, body=b"", content_type="text/plain; charset=utf-8"):
+    def _send(self, status, body=b"", content_type="text/plain; charset=utf-8", *, revision=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if revision is not None:
+            self.send_header("X-Pythona-Revision", revision)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -215,34 +218,54 @@ class Handler(BaseHTTPRequestHandler):
         if route is None:
             return
         session = self.server.session
-        if route != "api":
+        if route not in ("api", "file"):
             self._send(404)
             return
+        content_type = "application/octet-stream" if route == "file" else "application/json"
         if (self.headers.get("X-Pythona-Session") != session.token
-                or self.headers.get("Content-Type", "").split(";")[0] != "application/json"
+                or self.headers.get("Content-Type", "").split(";")[0] != content_type
                 or self.headers.get("Transfer-Encoding") is not None):
             self._send(403)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length <= 0 or length > MAX_REQUEST_BYTES:
+            limit = MAX_FILE_BYTES if route == "file" else MAX_REQUEST_BYTES
+            if length < (0 if route == "file" else 1) or length > limit:
                 self._send(413)
                 return
+            if route == "file":
+                metadata = self.headers.get("X-Pythona-Request", "")
+                if not metadata or not metadata.isascii() or len(metadata) > MAX_FILE_REQUEST_HEADER_BYTES:
+                    raise ValueError("Invalid file request")
+                request = json.loads(unquote(metadata, errors="strict"))
+                if (not isinstance(request, dict) or request.get("action") not in ("fs.read", "fs.write")
+                        or not isinstance(request.get("payload"), dict) or "data" in request["payload"]
+                        or (request["action"] == "fs.read" and length != 0)):
+                    raise ValueError("Invalid file request")
             raw = self.rfile.read(length)
             if len(raw) != length:
                 self._send(400)
                 return
-            request = json.loads(raw)
-            if not isinstance(request, dict):
-                raise ValueError("Invalid request")
+            if route == "api":
+                request = json.loads(raw)
+                if not isinstance(request, dict):
+                    raise ValueError("Invalid request")
+            elif request["action"] == "fs.write":
+                request["payload"]["data"] = raw
         except (ValueError, OSError):
             self._send(400)
             return
         try:
+            if route == "api" and request.get("action") in ("fs.read", "fs.write"):
+                raise WorkspaceError("InvalidRequest", "Use the file endpoint for file contents.")
             result = session.app.dispatch(request.get("action"), request.get("payload"))
             reply = {"result": result}
         except WorkspaceError as error:
             reply = {"error": {"code": error.code, "message": str(error)}}
         except Exception:
             reply = {"error": {"code": "Unavailable", "message": "The file operation failed."}}
+        else:
+            if route == "file" and request["action"] == "fs.read":
+                self._send(200, result["data"], "application/octet-stream", revision=result["revision"])
+                return
         self._send(200, json.dumps(reply, ensure_ascii=True).encode(), "application/json; charset=utf-8")

@@ -8,6 +8,7 @@ import {
 } from '@codingame/monaco-vscode-api';
 import { registerExtension, ExtensionHostKind } from '@codingame/monaco-vscode-api/extensions';
 import { CommandsRegistry } from '@codingame/monaco-vscode-api/monaco';
+import { EventType as GestureEventType, type GestureEvent } from '@codingame/monaco-vscode-api/vscode/vs/base/browser/touch';
 import { ColorScheme } from '@codingame/monaco-vscode-api/vscode/vs/platform/theme/common/theme';
 import getWorkbenchServiceOverride from '@codingame/monaco-vscode-workbench-service-override';
 import getConfigurationServiceOverride from '@codingame/monaco-vscode-configuration-service-override';
@@ -79,6 +80,7 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
     'chat.disableAIFeatures': true,
   };
 
+  const workbench = document.querySelector<HTMLElement>('#workbench')!;
   await initialize({
     ...getWorkbenchServiceOverride(),
     ...getConfigurationServiceOverride(),
@@ -99,7 +101,7 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
     }),
     ...getTextmateServiceOverride(),
     ...getThemeServiceOverride(),
-  }, document.querySelector<HTMLElement>('#workbench')!, {
+  }, workbench, {
     configurationDefaults,
     initialColorTheme: {
       themeType: bootstrap.preferences.theme.type as ColorScheme,
@@ -119,6 +121,16 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
     },
     windowIndicator: { label: 'Pythona', tooltip: t('localWorkspace'), command: 'pythona.openFolder' },
   });
+
+  // Gesture dispatch snapshots nested targets before a command removes its menu.
+  // Skip the later tap on the menubar button so it cannot reopen and steal focus.
+  workbench.addEventListener(GestureEventType.Tap, event => {
+    const initialTarget = (event as GestureEvent).initialTarget;
+    if (event.target instanceof Element && event.target.classList.contains('menubar-menu-button')
+        && initialTarget instanceof Node && !initialTarget.isConnected) {
+      event.stopImmediatePropagation();
+    }
+  }, true);
 
   const extension = registerExtension({
     name: 'workspace', publisher: 'pythona', version: '0.1.0', engines: { vscode: '*' },

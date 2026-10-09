@@ -92,41 +92,53 @@ export async function call<T>(action: string, payload: Record<string, unknown> =
   if (unloading) throw cancelled();
   if (recovery) await recovery;
   if (unloading) throw cancelled();
-  const request = () => fetch(new URL('api', window.location.href), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Pythona-Session': token },
-    body: JSON.stringify({ action, payload }),
-    signal: AbortSignal.timeout(30000),
-    cache: 'no-store',
-  });
-  let response: Response;
+  const fileTransfer = action === 'fs.read' || action === 'fs.write';
+  const headers: Record<string, string> = {
+    'Content-Type': fileTransfer ? 'application/octet-stream' : 'application/json',
+    'X-Pythona-Session': token,
+  };
+  let body: BodyInit | undefined;
+  if (fileTransfer) {
+    const { data, ...metadata } = payload;
+    headers['X-Pythona-Request'] = encodeURIComponent(JSON.stringify({ action, payload: metadata }));
+    if (action === 'fs.write') {
+      const bytes = data as Uint8Array;
+      body = bytes.buffer instanceof ArrayBuffer ? bytes as Uint8Array<ArrayBuffer> : bytes.slice();
+    }
+  } else body = JSON.stringify({ action, payload });
+  const request = async (): Promise<T> => {
+    const response = await fetch(new URL(fileTransfer ? 'file' : 'api', window.location.href), {
+      method: 'POST', headers, body, signal: AbortSignal.timeout(30000), cache: 'no-store',
+    });
+    if (!response.ok) throw new HostError('Unavailable', t('connectionUnavailable'));
+    if (action === 'fs.read' && response.headers.get('Content-Type') === 'application/octet-stream') {
+      const data = new Uint8Array(await response.arrayBuffer());
+      const revision = response.headers.get('X-Pythona-Revision');
+      if (!revision || !/^[0-9a-f]{64}$/.test(revision)) {
+        throw new HostError('Unavailable', t('connectionUnavailable'));
+      }
+      return { data, revision } as T;
+    }
+    const reply = await response.json();
+    if (reply.error) throw new HostError(reply.error.code, reply.error.message);
+    if (action === 'fs.read') throw new HostError('Unavailable', t('connectionUnavailable'));
+    return reply.result as T;
+  };
   try {
-    response = await request();
-  } catch {
+    return await request();
+  } catch (error) {
     if (unloading) throw cancelled();
+    if (error instanceof HostError) throw error;
     if (!repeatableReads.has(action)) {
       // A lost reply does not prove that a write or deletion was never executed.
       throw new HostError('Unavailable', t('connectionUnavailable'));
     }
     await reconnect();
     if (unloading) throw cancelled();
-    try { response = await request(); }
-    catch { throw unloading ? cancelled() : new HostError('Unavailable', t('connectionUnavailable')); }
+    try { return await request(); }
+    catch (error) {
+      if (unloading) throw cancelled();
+      throw error instanceof HostError ? error : new HostError('Unavailable', t('connectionUnavailable'));
+    }
   }
-  if (!response.ok) throw new HostError('Unavailable', t('connectionUnavailable'));
-  const reply = await response.json();
-  if (reply.error) throw new HostError(reply.error.code, reply.error.message);
-  return reply.result as T;
-}
-
-export function encodeBytes(bytes: Uint8Array): string {
-  let binary = '';
-  for (let start = 0; start < bytes.length; start += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
-  }
-  return btoa(binary);
-}
-
-export function decodeBytes(encoded: string): Uint8Array {
-  return Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
 }

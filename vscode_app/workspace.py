@@ -1,7 +1,5 @@
 """Workspace selection, persistence, and the small frontend command API."""
 
-import base64
-import binascii
 import errno
 import hashlib
 import json
@@ -159,15 +157,11 @@ class WorkspaceApp:
                 return self.files.list(path)
             if action == "fs.read":
                 data = self.files.read(path)
-                return {"data": base64.b64encode(data).decode("ascii"), "revision": revision(data)}
+                return {"data": data, "revision": revision(data)}
             if action == "fs.write":
-                encoded = payload.get("data")
-                if not isinstance(encoded, str) or len(encoded) > (MAX_FILE_BYTES + 2) // 3 * 4:
+                data = payload.get("data")
+                if not isinstance(data, bytes) or len(data) > MAX_FILE_BYTES:
                     raise WorkspaceError("InvalidRequest", "Invalid file data.")
-                try:
-                    data = base64.b64decode(encoded, validate=True)
-                except (binascii.Error, ValueError):
-                    raise WorkspaceError("InvalidRequest", "Invalid file data.") from None
                 expected = payload.get("expected")
                 if expected is not None and (not isinstance(expected, str) or len(expected) != 64):
                     raise WorkspaceError("InvalidRequest", "Invalid file revision.")

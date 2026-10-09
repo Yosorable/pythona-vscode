@@ -339,6 +339,7 @@ test('foreground recovery keeps dirty editors and resumes opening and saving fil
     else await route.continue();
   });
   await page.route('**/api', route => offline ? route.abort('failed') : route.continue());
+  await page.route('**/file', route => offline ? route.abort('failed') : route.continue());
   await page.evaluate(() => {
     window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
     (window as any).pythonaConnection.resume();
@@ -364,8 +365,9 @@ test('a lost save reply is not blindly replayed after reconnection', async ({ pa
   await command(page, 'cursorBottom');
   await command(page, 'type', { text: '# save reply lost\n' });
   let writes = 0;
-  await page.route('**/api', async route => {
-    if (route.request().postDataJSON()?.action !== 'fs.write') return route.continue();
+  await page.route('**/file', async route => {
+    const metadata = JSON.parse(decodeURIComponent(route.request().headers()['x-pythona-request']));
+    if (metadata.action !== 'fs.write') return route.continue();
     writes++;
     await route.fetch();
     await route.abort('failed');
@@ -397,11 +399,26 @@ test('opens a selected workspace, edits Unicode, saves, and restores it', async 
   await page.getByRole('button', { name: 'Open Folder', exact: true }).click();
   await choose(page, 'Project One');
   await expect(page.getByText('Other Project', { exact: true })).toHaveCount(0);
+  const readResponse = page.waitForResponse(response => {
+    const metadata = response.request().headers()['x-pythona-request'];
+    return !!metadata && JSON.parse(decodeURIComponent(metadata)).action === 'fs.read';
+  });
   await page.getByText('main.py', { exact: true }).dblclick();
+  const response = await readResponse;
+  expect(response.headers()['content-type']).toBe('application/octet-stream');
+  expect(response.headers()['x-pythona-revision']).toMatch(/^[0-9a-f]{64}$/);
+  expect(await response.body()).toEqual(Buffer.from('print("workspace one")\n'));
   await page.locator('.monaco-editor .view-lines').click();
   await shortcut(page, 'a');
   await page.keyboard.insertText('print("edited 你好 🐍")\n');
+  const writeRequest = page.waitForRequest(request => {
+    const metadata = request.headers()['x-pythona-request'];
+    return !!metadata && JSON.parse(decodeURIComponent(metadata)).action === 'fs.write';
+  });
   await shortcut(page, 's');
+  const request = await writeRequest;
+  expect(request.headers()['content-type']).toBe('application/octet-stream');
+  expect(request.postDataBuffer()).toEqual(Buffer.from('print("edited 你好 🐍")\n'));
   await expect.poll(() => readFile(join(host.documents, 'Project One/main.py'), 'utf8')).toBe('print("edited 你好 🐍")\n');
   await command(page, 'workbench.action.splitEditorRight');
   await expect(page.locator('.editor-group-container')).toHaveCount(2);
@@ -499,53 +516,70 @@ test('a new untitled file saves into the selected project through Save As', asyn
   await expect(page.locator('.explorer-viewlet')).toContainText('created.py');
 });
 
-test('File and Edit popups accept taps over an open editor', async ({ browser, host }) => {
-  const page = await browser.newPage({
-    viewport: { width: 1210, height: 782 },
-    screen: { width: 1210, height: 834 },
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)',
-    hasTouch: true,
+for (const display of [
+  { name: 'iPad', viewport: { width: 1210, height: 782 }, screen: { width: 1210, height: 834 } },
+  { name: 'iPhone', viewport: { width: 393, height: 759 }, screen: { width: 393, height: 852 } },
+]) {
+  test(`${display.name} menu popups accept taps over an open editor`, async ({ browser, host }) => {
+    const page = await browser.newPage({
+      viewport: display.viewport,
+      screen: display.screen,
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)',
+      hasTouch: true,
+    });
+
+    try {
+      await recordReadiness(page);
+      await page.goto(host.url);
+      await ready(page);
+      await startPicker(page);
+      await choose(page, 'Project One');
+      await page.getByText('main.py', { exact: true }).dblclick();
+      await command(page, 'cursorBottom');
+      await command(page, 'type', { text: '# saved from the menu\n' });
+
+      // WKWebView can keep the titlebar inactive while the user taps its menus.
+      await page.locator('.part.titlebar').evaluate(element => element.classList.add('inactive'));
+
+      const openMenu = async (name: string) => {
+        const button = page.getByRole('menuitem', { name, exact: true });
+        if (!await button.isVisible()) {
+          await page.locator('.menubar-menu-button').filter({ has: page.locator('.toolbar-toggle-more') }).tap();
+        }
+        await button.tap();
+      };
+      const menu = page.locator('.menubar-menu-items-holder').last();
+      await openMenu('File');
+      await menu.getByText('Save', { exact: true }).tap();
+      await expect.poll(() => readFile(join(host.documents, 'Project One/main.py'), 'utf8'))
+        .toContain('# saved from the menu');
+      await expect(page.locator('.menubar-menu-items-holder')).toHaveCount(0);
+
+      await openMenu('Edit');
+      await menu.getByText('Find', { exact: true }).tap();
+      await expect(page.locator('.find-widget').getByRole('textbox', { name: 'Find', exact: true })).toBeVisible();
+      await page.keyboard.press('Escape');
+
+      await openMenu('View');
+      await menu.getByText('Editor Layout', { exact: true }).tap();
+      await menu.getByText('Split Right', { exact: true }).tap();
+      await expect(page.locator('.editor-group-container')).toHaveCount(2);
+      await expect(page.locator('.menubar-menu-items-holder')).toHaveCount(0);
+
+      await openMenu('Go');
+      const goToFile = menu.getByRole('menuitem', { name: /^Go to File/ });
+      expect(await goToFile.evaluate(item => {
+        const rect = item.getBoundingClientRect();
+        return item.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+      })).toBe(true);
+      await goToFile.tap();
+      const quickInput = page.locator('.quick-input-widget input');
+      await expect(quickInput).toBeFocused();
+      await quickInput.fill('main.py');
+      await expect(page.locator('.quick-input-list')).toContainText('main.py');
+      await expect(page.locator('.menubar-menu-items-holder')).toHaveCount(0);
+    } finally {
+      await page.close();
+    }
   });
-
-  try {
-    await page.goto(host.url);
-    await ready(page);
-    await startPicker(page);
-    await choose(page, 'Project One');
-    await page.getByText('main.py', { exact: true }).dblclick();
-    await command(page, 'cursorBottom');
-    await command(page, 'type', { text: '# saved from the menu\n' });
-
-    // WKWebView can keep the titlebar inactive while the user taps its menus.
-    await page.locator('.part.titlebar').evaluate(element => element.classList.add('inactive'));
-
-    const menu = page.locator('.menubar-menu-items-holder');
-    await page.getByRole('menuitem', { name: 'File', exact: true }).tap();
-    await menu.getByText('Save', { exact: true }).tap();
-    await expect.poll(() => readFile(join(host.documents, 'Project One/main.py'), 'utf8'))
-      .toContain('# saved from the menu');
-
-    await page.getByRole('menuitem', { name: 'Edit', exact: true }).tap();
-    await menu.getByText('Find', { exact: true }).tap();
-    await expect(page.locator('.find-widget').getByRole('textbox', { name: 'Find', exact: true })).toBeVisible();
-    await page.keyboard.press('Escape');
-
-    await page.getByRole('menuitem', { name: 'View', exact: true }).tap();
-    await menu.getByText('Editor Layout', { exact: true }).tap();
-    await menu.getByText('Split Right', { exact: true }).tap();
-    await expect(page.locator('.editor-group-container')).toHaveCount(2);
-
-    await page.getByRole('menuitem', { name: 'Go', exact: true }).tap();
-    const goToFile = menu.getByRole('menuitem', { name: /^Go to File/ });
-    expect(await goToFile.evaluate(item => {
-      const rect = item.getBoundingClientRect();
-      return item.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
-    })).toBe(true);
-    await page.keyboard.press('Escape');
-    await shortcut(page, 'p');
-    await page.locator('.quick-input-widget input').fill('main.py');
-    await expect(page.locator('.quick-input-list')).toContainText('main.py');
-  } finally {
-    await page.close();
-  }
-});
+}
