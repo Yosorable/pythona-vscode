@@ -1,6 +1,8 @@
 const en = {
   opening: 'Opening Pythona VSCode…',
   failed: 'Unable to open the workbench.',
+  preferencesFailed: 'Unable to save workbench settings.',
+  themeFailed: 'Unable to load the selected color theme.',
   openFolder: 'Open Folder…',
   folderTitle: 'Open Folder',
   openThis: 'Open This Folder',
@@ -22,6 +24,8 @@ const en = {
 type Strings = { [K in keyof typeof en]: string };
 const hans: Strings = {
   opening: '正在打开 Pythona VSCode…', failed: '无法打开工作台。',
+  preferencesFailed: '无法保存工作台设置。',
+  themeFailed: '无法加载所选颜色主题。',
   openFolder: '打开文件夹…', folderTitle: '打开文件夹', openThis: '打开此文件夹',
   parentFolder: '上级文件夹', recent: '最近打开', chooseProject: '选择 Documents 中的项目文件夹',
   newFolder: '新建文件夹…', folderName: '文件夹名称', invalidName: '输入不以点开头且不包含斜杠的文件夹名称。',
@@ -31,6 +35,8 @@ const hans: Strings = {
 };
 const hant: Strings = {
   opening: '正在開啟 Pythona VSCode…', failed: '無法開啟工作台。',
+  preferencesFailed: '無法儲存工作台設定。',
+  themeFailed: '無法載入選取的色彩佈景主題。',
   openFolder: '開啟資料夾…', folderTitle: '開啟資料夾', openThis: '開啟此資料夾',
   parentFolder: '上層資料夾', recent: '最近開啟', chooseProject: '選取 Documents 中的專案資料夾',
   newFolder: '新增資料夾…', folderName: '資料夾名稱', invalidName: '輸入不以點開頭且不包含斜線的資料夾名稱。',

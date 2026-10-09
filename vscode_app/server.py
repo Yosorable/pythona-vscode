@@ -9,6 +9,7 @@ import threading
 from urllib.parse import unquote, urlsplit
 
 from .filesystem import MAX_FILE_BYTES, WorkspaceError, parts
+from .preferences import startup_style
 
 
 BUNDLE = Path(__file__).resolve().parents[1] / "frontend" / "dist"
@@ -103,6 +104,10 @@ class Handler(BaseHTTPRequestHandler):
             file = (self.server.session.bundle / relative).resolve(strict=True)
             file.relative_to(self.server.session.bundle)
             body = file.read_bytes()
+            if file == self.server.session.bundle / "index.html":
+                with self.server.session.app.lock:
+                    theme = self.server.session.app.preferences.snapshot()["theme"]
+                body = body.replace(b"<!--pythona:appearance-->", startup_style(theme).encode("utf-8"))
         except (OSError, ValueError, WorkspaceError):
             self._send(404)
             return

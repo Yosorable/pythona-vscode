@@ -18,9 +18,10 @@ This is an independent open-source project, not a Microsoft product.
 - Syntax highlighting for Python, JSON, and Markdown.
 - Save, discard, or cancel when switching or closing a workspace with unsaved edits.
 - Reopen the last workspace and retain a list of recently opened projects.
+- Retain user settings and the selected color theme across launches.
 - English, Simplified Chinese, and Traditional Chinese, following Pythona's language.
-- A keyboard-sized native viewport and a workbench readiness handshake that prevents
-  a white WebView from appearing while the page starts or reloads.
+- A keyboard-sized native viewport, theme-matched startup colors, and a readiness
+  handshake that waits for theme loading and layout restoration before showing the workbench.
 
 This initial version focuses on editing. Python execution, a REPL or SSH terminal,
 Git integration, AI assistance, and an extension marketplace are not implemented.
@@ -38,6 +39,10 @@ Git integration, AI assistance, and an extension marketplace are not implemented
 The last selected folder reopens next time. **Pythona: Close Folder** returns to
 the empty workbench. Single-folder workspaces are supported; `.code-workspace`
 multi-root files, iCloud, and external folders are outside this version's scope.
+
+Use **Preferences: Color Theme** in the command palette to select a bundled theme.
+Dark Modern is the initial default. Your confirmed choice and user settings persist
+locally; previewing a theme and cancelling does not change the saved startup colors.
 
 Files larger than 16 MiB are rejected. Symlinks are not followed, including links
 to other locations inside Documents. Deletion requires the workbench's confirmation
@@ -91,12 +96,14 @@ vscode_app/
   ui.py                    UIKit / WKWebView presentation and readiness
   server.py                Loopback static assets and JSON API
   workspace.py             Workspace selection, recent folders, and state
+  preferences.py           User settings and the cached startup theme
   filesystem.py            Descriptor-relative file operations and atomic saves
 frontend/
   src/workbench.ts          VS Code services, commands, and folder picker
   src/filesystem.ts         Workbench filesystem provider
   src/bridge.ts             Local request transport
   src/storage.ts            Workbench storage adapter
+  src/preferences.ts        Theme readiness and user-settings persistence
   src/strings.ts            Product translations
   dist/                    Offline production bundle
 tests/                     Python integration and native smoke tests
@@ -110,8 +117,11 @@ threads and translated through a workspace filesystem provider. No code executio
 endpoint is exposed.
 
 The native host starts WKWebView at `alpha = 0`. The frontend signals readiness
-after initialization and two animation frames; the host then sets `alpha = 1`.
-Native and HTML backgrounds use the same dark color during startup and reload.
+after the selected theme has loaded, the layout has restored, and two animation
+frames have elapsed; the host then sets `alpha = 1`. The native container, initial
+HTML, and workbench use the last confirmed theme's colors from the first frame,
+including light themes. Theme previews update the current surface, but only confirmed
+choices are saved for the next launch. Application defaults do not overwrite user settings.
 
 ## Validation
 
@@ -127,12 +137,14 @@ npm test
 Local browser checks use an installed Google Chrome and Playwright WebKit with an
 iPad viewport. The tests use temporary
 projects and cover actual saves, workspace switching, dirty-file choices, split
-editors, menu actions, nested-file search, offline loading, and the pre-JavaScript background.
+editors, menu actions, nested-file search, offline loading, delayed theme loading,
+theme persistence, and dark/light pre-JavaScript backgrounds.
 Python checks cover filesystem boundaries, symlinks, conflicting writes, persistence,
-HTTP request validation, and shutdown.
+failed preference writes, HTTP request validation, and shutdown.
 
 Run **`tests/native_smoke.py`** inside Pythona to exercise the real UIKit container,
-WebKit readiness, Unicode saves, split editors, and menu hit testing. It uses temporary files, closes
+WebKit readiness with delayed dark/light themes, matching native colors, Unicode saves,
+split editors, and menu hit testing. It uses temporary files, closes
 its own window/server, and writes a report to `.local/native-smoke.json`.
 Automated smoke tests do not substitute for hands-on Chinese IME, touch-selection,
 and physical keyboard checks on an iPad.
@@ -142,7 +154,8 @@ and physical keyboard checks on an iPad.
 Workspace files remain in the selected project. `.local/state.json` beside
 `main.py` stores Documents-relative recent paths and the last workspace.
 `.local/workbench` stores workbench UI state. The WebView uses a nonpersistent
-website data store. Browser preview data is temporary unless `--state` is supplied.
+website data store. `.local/preferences.json` stores user settings and a small color
+palette for startup. Browser preview data is temporary unless `--state` is supplied.
 
 The runtime serves assets and file operations only on loopback, with an unguessable
 session path/header and Host/Origin checks. Frontend resources are bundled locally;

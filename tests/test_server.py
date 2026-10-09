@@ -17,7 +17,7 @@ class ServerTests(unittest.TestCase):
         (self.documents / "Project/main.py").write_text("print(42)\n")
         bundle = root / "bundle"
         bundle.mkdir()
-        (bundle / "index.html").write_text("<!doctype html><title>Workbench</title>")
+        (bundle / "index.html").write_text("<!doctype html><!--pythona:appearance--><title>Workbench</title>")
         (bundle / "test.wasm").write_bytes(b"\0asm")
         self.app = WorkspaceApp(self.documents, root / "state.json")
         self.server = LocalServer(self.app, bundle=bundle)
@@ -57,6 +57,17 @@ class ServerTests(unittest.TestCase):
                      self.server.prefix + "%2fetc/passwd"]:
             with self.subTest(path=path):
                 self.assertEqual(self.request("GET", path)[0], 404)
+
+    def test_html_uses_saved_light_colors_before_javascript(self):
+        self.app.dispatch("preferences.update", {"settings": "{}", "theme": {
+            "name": "Light Modern", "type": "light", "colors": {
+                "sideBar.background": "#f8f8f8", "editor.background": "#ffffff", "foreground": "#616161"}}})
+        for route in (self.server.prefix, self.server.prefix + "index.html"):
+            status, _, body = self.request("GET", route)
+            self.assertEqual(status, 200)
+            self.assertIn(b"--startup-background: #f8f8f8", body)
+            self.assertIn(b"color-scheme: light", body)
+            self.assertNotIn(b"<!--pythona:appearance-->", body)
 
     def test_api_requires_session_and_matching_origin_and_host(self):
         self.assertEqual(self.api("bootstrap")[0], 200)

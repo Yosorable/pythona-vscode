@@ -10,6 +10,7 @@ import re
 import threading
 
 from .filesystem import MAX_FILE_BYTES, RootedFiles, WorkspaceError, parts, revision
+from .preferences import Preferences
 
 
 class WorkspaceApp:
@@ -20,6 +21,7 @@ class WorkspaceApp:
         self.language = language
         self.closed = threading.Event()
         self.lock = threading.RLock()
+        self.preferences = Preferences(self.state_path.parent)
         self.files = None
         self.workspace = None
         self.recent = []
@@ -120,7 +122,10 @@ class WorkspaceApp:
     def _dispatch(self, action, payload):
         if action == "bootstrap":
             return {"workspace": self.workspace, "recent": self.recent, "language": self.language,
-                    "maxFileBytes": MAX_FILE_BYTES}
+                    "maxFileBytes": MAX_FILE_BYTES, "preferences": self.preferences.snapshot()}
+        if action == "preferences.update":
+            self.preferences.update(payload)
+            return None
         if action == "folders.list":
             return self._browse(payload.get("path", ""))
         if action == "folders.create":

@@ -3,10 +3,12 @@ import {
   IFileDialogService,
   IHostService,
   IStorageService,
+  IWorkbenchLayoutService,
   initialize,
 } from '@codingame/monaco-vscode-api';
 import { registerExtension, ExtensionHostKind } from '@codingame/monaco-vscode-api/extensions';
 import { CommandsRegistry } from '@codingame/monaco-vscode-api/monaco';
+import { ColorScheme } from '@codingame/monaco-vscode-api/vscode/vs/platform/theme/common/theme';
 import getWorkbenchServiceOverride from '@codingame/monaco-vscode-workbench-service-override';
 import getConfigurationServiceOverride from '@codingame/monaco-vscode-configuration-service-override';
 import { initUserConfiguration } from '@codingame/monaco-vscode-configuration-service-override/common';
@@ -34,6 +36,7 @@ import type * as VSCode from 'vscode';
 import { call, type Bootstrap } from './bridge';
 import { WorkspaceFiles, workspaceURI } from './filesystem';
 import { HostStorage } from './storage';
+import { restorePreferences } from './preferences';
 import { t } from './strings';
 
 export async function start(bootstrap: Bootstrap): Promise<void> {
@@ -49,8 +52,9 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
   };
 
   registerCustomProvider('file', new WorkspaceFiles(bootstrap.workspace));
-  await initUserConfiguration(JSON.stringify({
-    'workbench.colorTheme': 'Default Dark Modern',
+  await initUserConfiguration(bootstrap.preferences.settings);
+  const configurationDefaults = {
+    'workbench.colorTheme': 'Dark Modern',
     'workbench.startupEditor': 'none',
     'workbench.tips.enabled': false,
     'workbench.enableExperiments': false,
@@ -73,7 +77,7 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
     'extensions.autoCheckUpdates': false,
     'extensions.autoUpdate': false,
     'chat.disableAIFeatures': true,
-  }));
+  };
 
   await initialize({
     ...getWorkbenchServiceOverride(),
@@ -96,6 +100,11 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
     ...getTextmateServiceOverride(),
     ...getThemeServiceOverride(),
   }, document.querySelector<HTMLElement>('#workbench')!, {
+    configurationDefaults,
+    initialColorTheme: {
+      themeType: bootstrap.preferences.theme.type as ColorScheme,
+      colors: bootstrap.preferences.theme.colors,
+    },
     enableWorkspaceTrust: false,
     workspaceProvider: {
       workspace: bootstrap.workspace ? { folderUri: workspaceURI(bootstrap.workspace) } : undefined,
@@ -123,6 +132,9 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
   }, ExtensionHostKind.LocalProcess);
   const api = await extension.getApi();
   await extension.setAsDefaultApi();
+  const preferences = await restorePreferences(bootstrap.preferences, error => {
+    void api.window.showErrorMessage(`${t('preferencesFailed')} ${error instanceof Error ? error.message : String(error)}`);
+  });
 
   async function confirmLeave(): Promise<boolean> {
     if (!api.workspace.textDocuments.some(document => document.isDirty)) return true;
@@ -134,6 +146,7 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
   }
 
   async function flush(): Promise<void> {
+    await preferences.flush();
     await (await getService(IStorageService)).flush();
   }
 
@@ -226,4 +239,5 @@ export async function start(bootstrap: Bootstrap): Promise<void> {
   window.pythonaWorkbench.executeCommand = (command, ...args) => Promise.resolve(api.commands.executeCommand(command, ...args));
 
   await api.commands.executeCommand('workbench.view.explorer');
+  await (await getService(IWorkbenchLayoutService)).whenRestored;
 }

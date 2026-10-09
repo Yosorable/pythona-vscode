@@ -4,7 +4,10 @@ import './style.css';
 
 declare global {
   interface Window {
-    webkit?: { messageHandlers?: { workbenchReady?: { postMessage(message: string): void } } };
+    webkit?: { messageHandlers?: {
+      workbenchReady?: { postMessage(message: string): void };
+      workbenchTheme?: { postMessage(message: string): void };
+    } };
     pythonaWorkbench: {
       ready: boolean;
       requestClose(): Promise<void>;

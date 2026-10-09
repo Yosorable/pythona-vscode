@@ -11,15 +11,34 @@ import time
 import traceback
 
 
-def main():
+def native_colors(host):
+    result = {}
+    for name, color in (
+        ("container", host.controller.view.backgroundColor),
+        ("webview", host.webview.backgroundColor),
+        ("page", host.webview.underPageBackgroundColor),
+        ("scroll", host.webview.scrollView.backgroundColor),
+    ):
+        components = [c_double() for _ in range(4)]
+        if not color.getRed_green_blue_alpha_(*(byref(item) for item in components)):
+            raise RuntimeError(f"Could not read {name} background color.")
+        result[name] = [item.value for item in components]
+    return result
+
+
+def run_case(scheme):
     root = Path(__file__).resolve().parents[1]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     report = {"passed": False}
     app = server = host = None
+    theme_requested = threading.Event()
+    release_theme = threading.Event()
+    callback_errors = []
     original_unraisable = sys.unraisablehook
 
     def record_callback_error(error):
+        callback_errors.append(str(error.exc_value))
         target = root / ".local" / "native-callback-error.txt"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("".join(traceback.format_exception(error.exc_type, error.exc_value, error.exc_traceback)), encoding="utf-8")
@@ -28,7 +47,7 @@ def main():
     sys.unraisablehook = record_callback_error
     with tempfile.TemporaryDirectory(prefix="pythona_vscode_smoke_") as temporary:
         try:
-            from vscode_app.server import LocalServer
+            from vscode_app.server import Handler, LocalServer
             from vscode_app.ui import WorkbenchWindow
             from vscode_app.workspace import WorkspaceApp
 
@@ -38,6 +57,12 @@ def main():
             file = project / "main.py"
             file.write_text('print("Native workspace")\n', encoding="utf-8")
             app = WorkspaceApp(documents, Path(temporary) / "state.json")
+            if scheme == "light":
+                app.dispatch("preferences.update", {
+                    "settings": '{"workbench.colorTheme": "Light Modern"}',
+                    "theme": {"name": "Light Modern", "type": "light", "colors": {
+                        "sideBar.background": "#f8f8f8", "editor.background": "#ffffff", "foreground": "#616161"}},
+                })
             workspace = app.open_workspace("Native Workspace")
             reports = []
             completed = threading.Event()
@@ -51,10 +76,26 @@ def main():
                 return original(action, payload)
 
             app.dispatch = dispatch
+            class DelayedThemeHandler(Handler):
+                def do_GET(self):
+                    if f"/{scheme}_modern-" in self.path:
+                        theme_requested.set()
+                        release_theme.wait(15)
+                    super().do_GET()
+
             server = LocalServer(app)
+            server.http.RequestHandlerClass = DelayedThemeHandler
             host = WorkbenchWindow(app, server)
             builtins.run_on_ui(host.open).wait()
             transparent_at_start = builtins.run_on_ui(lambda: host.webview.alpha == 0).wait()
+            if not theme_requested.wait(30):
+                raise RuntimeError("The workbench did not request its theme.")
+            # Hold the theme across multiple frames to detect premature native reveal.
+            time.sleep(0.3)
+            transparent_while_loading = builtins.run_on_ui(lambda: host.webview.alpha == 0).wait()
+            colors_while_loading = builtins.run_on_ui(lambda: native_colors(host)).wait()
+            style_while_loading = builtins.run_on_ui(lambda: host.controller.overrideUserInterfaceStyle).wait()
+            release_theme.set()
             deadline = time.monotonic() + 30
             while not host.loaded and not app.closed.is_set() and time.monotonic() < deadline:
                 time.sleep(0.05)
@@ -111,25 +152,15 @@ def main():
                 raise RuntimeError("The workbench did not send a native smoke report.")
             report = reports[0]
             report["transparentAtStart"] = transparent_at_start
+            report["transparentWhileThemeLoads"] = transparent_while_loading
+            report["backgroundsWhileThemeLoads"] = colors_while_loading
+            report["interfaceStyleWhileThemeLoads"] = style_while_loading
             report["visibleAfterReady"] = builtins.run_on_ui(lambda: host.webview.alpha == 1).wait()
-            def native_colors():
-                result = {}
-                for name, color in (
-                    ("container", host.controller.view.backgroundColor),
-                    ("webview", host.webview.backgroundColor),
-                    ("page", host.webview.underPageBackgroundColor),
-                    ("scroll", host.webview.scrollView.backgroundColor),
-                ):
-                    components = [c_double() for _ in range(4)]
-                    if not color.getRed_green_blue_alpha_(*(byref(item) for item in components)):
-                        raise RuntimeError(f"Could not read {name} background color.")
-                    result[name] = [item.value for item in components]
-                return result
-
-            report["nativeBackgrounds"] = builtins.run_on_ui(native_colors).wait()
+            report["nativeBackgrounds"] = builtins.run_on_ui(lambda: native_colors(host)).wait()
+            expected_component = 248 if scheme == "light" else 24
             report["nativeBackgroundsMatch"] = all(
-                all(abs(actual - expected) < 0.00001 for actual, expected in zip(color, [24 / 255] * 3 + [1]))
-                for color in report["nativeBackgrounds"].values())
+                all(abs(actual - expected) < 0.00001 for actual, expected in zip(color, [expected_component / 255] * 3 + [1]))
+                for colors in (colors_while_loading, report["nativeBackgrounds"]) for color in colors.values())
             report["saved"] = file.read_text(encoding="utf-8")
             builtins.run_on_ui(lambda: host.webview.reload()).wait()
             report["transparentDuringReload"] = False
@@ -145,12 +176,15 @@ def main():
                 time.sleep(0.02)
             report["passed"] = bool(report.get("passed") and "# Native save 你好 🐍" in report["saved"]
                                     and report["transparentAtStart"] and report["visibleAfterReady"]
+                                    and report["transparentWhileThemeLoads"]
+                                    and report["interfaceStyleWhileThemeLoads"] == (1 if scheme == "light" else 2)
                                     and report["transparentDuringReload"] and report["visibleAfterReload"]
-                                    and report["nativeBackgroundsMatch"] and report["background"] == "rgb(24, 24, 24)")
-            time.sleep(2)
+                                    and report["nativeBackgroundsMatch"]
+                                    and report["background"] == f"rgb({expected_component}, {expected_component}, {expected_component})")
         except Exception:
             report = {"passed": False, "error": traceback.format_exc()}
         finally:
+            release_theme.set()
             sys.unraisablehook = original_unraisable
             if host:
                 builtins.run_on_ui(host.close).wait()
@@ -158,6 +192,16 @@ def main():
                 server.close()
             if app:
                 app.close()
+    report["scheme"] = scheme
+    report["callbackErrors"] = callback_errors
+    report["passed"] = report["passed"] and not callback_errors
+    return report
+
+
+def main():
+    cases = [run_case(scheme) for scheme in ("dark", "light")]
+    report = {"passed": all(case["passed"] for case in cases), "themes": cases}
+    root = Path(__file__).resolve().parents[1]
     result = root / ".local" / "native-smoke.json"
     result.parent.mkdir(parents=True, exist_ok=True)
     result.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

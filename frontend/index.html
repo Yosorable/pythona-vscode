@@ -4,9 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
+    <!--pythona:appearance-->
     <style>
-      html, body { margin: 0; width: 100%; height: 100%; background: #181818; color: #cccccc; }
-      #startup { position: fixed; inset: 0; display: grid; place-content: center; padding: 32px; background: #181818; font: 14px -apple-system, sans-serif; }
+      html, body { margin: 0; width: 100%; height: 100%; background: var(--startup-background, #181818); color: var(--startup-foreground, #cccccc); }
+      #startup { position: fixed; inset: 0; display: grid; place-content: center; padding: 32px; background: var(--startup-background, #181818); font: 14px -apple-system, sans-serif; }
     </style>
     <title>Pythona VSCode</title>
   </head>

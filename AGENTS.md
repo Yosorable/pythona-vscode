@@ -16,7 +16,9 @@ Read README.md for the architecture, runtime limits, and validation commands.
 - Keep the server loopback-only, with session, Host, and Origin validation.
   A browser preview uses temporary files unless `--documents` is explicitly supplied.
 - Keep the web view transparent until the frontend readiness message arrives.
-  Apply the same behavior on workspace reload, with matching native and HTML backgrounds.
+  Wait for theme loading and layout restoration, including on workspace reload.
+  Use the saved theme for native, HTML, and initial workbench colors; preserve user
+  settings and do not persist unconfirmed theme previews.
 - Keep custom product strings in `frontend/src/strings.ts` and load upstream
   language packs before importing workbench code.
 - Run the relevant Python and built-frontend integration tests after behavior changes.

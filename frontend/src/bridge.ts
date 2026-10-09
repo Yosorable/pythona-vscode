@@ -9,6 +9,18 @@ export interface Bootstrap {
   recent: string[];
   language: string;
   maxFileBytes: number;
+  preferences: Preferences;
+}
+
+export interface ThemeSnapshot {
+  name: string;
+  type: 'dark' | 'light' | 'hcDark' | 'hcLight';
+  colors: Record<string, string>;
+}
+
+export interface Preferences {
+  settings: string;
+  theme: ThemeSnapshot;
 }
 
 export class HostError extends Error {

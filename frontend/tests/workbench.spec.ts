@@ -78,6 +78,129 @@ async function shortcut(page: Page, key: string) {
   await page.keyboard.press(`${modifier}+${key}`);
 }
 
+async function savedPreferences(host: Host) {
+  return JSON.parse(await readFile(join(dirname(host.state), 'preferences.json'), 'utf8'));
+}
+
+async function recordReadiness(page: Page) {
+  await page.addInitScript(() => {
+    (window as any).nativeReadyMessages = [];
+    (window as any).webkit = { messageHandlers: {
+      workbenchReady: { postMessage: (value: string) => (window as any).nativeReadyMessages.push(value) },
+    } };
+  });
+}
+
+async function waitForPaints(page: Page) {
+  // Keep the theme blocked through several frames, including the old early-ready path.
+  await page.evaluate(async () => {
+    for (let frame = 0; frame < 12; frame++) await new Promise(requestAnimationFrame);
+  });
+}
+
+test('cold startup stays dark and waits for a delayed theme before native readiness', async ({ page, host }) => {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await recordReadiness(page);
+  await page.route('**/dark_modern-*.json', async route => { await held; await route.continue(); });
+  try {
+    const requested = page.waitForRequest('**/dark_modern-*.json');
+    await page.goto(host.url);
+    await requested;
+    await expect(page.locator('.monaco-workbench.vs-dark')).toHaveCount(1);
+    await waitForPaints(page);
+    expect(await page.evaluate(() => ({
+      ready: (window as any).pythonaWorkbench.ready,
+      messages: (window as any).nativeReadyMessages,
+      editor: getComputedStyle(document.querySelector('.monaco-workbench')!).getPropertyValue('--vscode-editor-background').trim(),
+      background: getComputedStyle(document.documentElement).backgroundColor,
+    }))).toEqual({ ready: false, messages: [], editor: '#1f1f1f', background: 'rgb(24, 24, 24)' });
+    release();
+    await ready(page);
+    await expect.poll(() => page.evaluate(() => (window as any).nativeReadyMessages)).toEqual(['ready']);
+  } finally {
+    release();
+  }
+});
+
+test('a selected light theme survives a fresh browser and delayed theme loading', async ({ page, browser, host }) => {
+  await page.goto(host.url);
+  await ready(page);
+  await page.evaluate(() => { void (window as any).pythonaWorkbench.executeCommand('workbench.action.selectTheme'); });
+  await page.locator('.quick-input-widget:visible input').fill('Light Modern');
+  await page.locator('.quick-input-list').getByText('Light Modern', { exact: true }).click();
+  await expect.poll(async () => (await savedPreferences(host)).theme.name).toBe('Light Modern');
+  expect((await savedPreferences(host)).settings).toContain('Light Modern');
+
+  const firstPaint = await browser.newPage({ javaScriptEnabled: false });
+  try {
+    await firstPaint.goto(host.url);
+    expect(await firstPaint.evaluate(() => ['html', 'body', '#startup'].map(selector =>
+      getComputedStyle(document.querySelector(selector)!).backgroundColor)))
+      .toEqual(['rgb(248, 248, 248)', 'rgb(248, 248, 248)', 'rgb(248, 248, 248)']);
+  } finally {
+    await firstPaint.close();
+  }
+
+  const fresh = await browser.newPage();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  try {
+    await recordReadiness(fresh);
+    await fresh.route('**/light_modern-*.json', async route => { await held; await route.continue(); });
+    const requested = fresh.waitForRequest('**/light_modern-*.json');
+    await fresh.goto(host.url);
+    await requested;
+    await expect(fresh.locator('.monaco-workbench.vs')).toHaveCount(1);
+    await waitForPaints(fresh);
+    expect(await fresh.evaluate(() => ({ ready: (window as any).pythonaWorkbench.ready,
+      messages: (window as any).nativeReadyMessages,
+      background: getComputedStyle(document.documentElement).backgroundColor,
+    }))).toEqual({ ready: false, messages: [], background: 'rgb(248, 248, 248)' });
+    release();
+    await ready(fresh);
+    await expect(fresh.locator('.monaco-workbench.vs')).toHaveCount(1);
+    await expect.poll(() => fresh.evaluate(() => (window as any).nativeReadyMessages)).toEqual(['ready']);
+  } finally {
+    release();
+    await fresh.close();
+  }
+});
+
+test('previewing and cancelling a theme does not replace the saved startup colors', async ({ page, host }) => {
+  await page.goto(host.url);
+  await ready(page);
+  await page.evaluate(() => { void (window as any).pythonaWorkbench.executeCommand('workbench.action.selectTheme'); });
+  await page.locator('.quick-input-widget:visible input').fill('Light Modern');
+  await expect(page.locator('.monaco-workbench.vs')).toHaveCount(1);
+  expect((await savedPreferences(host)).theme.type).toBe('dark');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.monaco-workbench.vs-dark')).toHaveCount(1);
+  expect((await savedPreferences(host)).theme.type).toBe('dark');
+});
+
+test('user settings and custom startup colors are not overwritten on reload', async ({ page, host }) => {
+  await page.goto(host.url);
+  await ready(page);
+  await command(page, '_workbench.open', { scheme: 'vscode-userdata', path: '/User/settings.json' });
+  await page.locator('.monaco-editor .view-lines').click();
+  await shortcut(page, 'a');
+  const settings = '// Keep this comment\n{\n  "workbench.colorTheme": "Light Modern",\n'
+    + '  "editor.fontSize": 19,\n  "workbench.colorCustomizations": {"sideBar.background": "#f2f4f8"},\n}\n';
+  await page.keyboard.insertText(settings);
+  await command(page, 'workbench.action.files.save');
+  await expect.poll(async () => (await savedPreferences(host)).theme.colors['sideBar.background']).toBe('#f2f4f8');
+  const saved = (await savedPreferences(host)).settings;
+  // The editor may auto-indent typed JSON; persistence must retain the edited text.
+  const lines = (text: string) => text.split(/\r?\n/).map(line => line.trim()).join('\n');
+  expect(lines(saved)).toBe(lines(settings));
+  await page.reload();
+  await ready(page);
+  await expect(page.locator('.monaco-workbench.vs')).toHaveCount(1);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)).toBe('rgb(242, 244, 248)');
+  expect((await savedPreferences(host)).settings).toBe(saved);
+});
+
 test('opens a selected workspace, edits Unicode, saves, and restores it', async ({ page, host }) => {
   const errors: string[] = [];
   const external: string[] = [];

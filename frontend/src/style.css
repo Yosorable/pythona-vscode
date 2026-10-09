@@ -3,7 +3,7 @@ html, body, #workbench {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #181818;
+  background: var(--startup-background, #181818);
 }
 
 body {
@@ -16,8 +16,8 @@ body {
   display: grid;
   place-content: center;
   padding: 32px;
-  color: #cccccc;
-  background: #181818;
+  color: var(--startup-foreground, #cccccc);
+  background: var(--startup-background, #181818);
   font: 14px -apple-system, BlinkMacSystemFont, sans-serif;
 }
 

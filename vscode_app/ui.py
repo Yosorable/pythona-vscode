@@ -2,6 +2,7 @@
 
 import builtins
 from ctypes import c_long, c_void_p
+import json
 from pathlib import Path
 import weakref
 
@@ -10,6 +11,8 @@ from rubicon.objc.runtime import load_library
 
 from .server import LocalServer
 from .workspace import WorkspaceApp
+from .filesystem import WorkspaceError
+from .preferences import validate_theme
 
 
 _WEBKIT = load_library("WebKit")
@@ -38,9 +41,15 @@ class WorkbenchHandler(NSObject, auto_rename=True):
     @objc_method
     def userContentController_didReceiveScriptMessage_(self, controller, message):
         host = self.host_ref()
-        if (host and host.webview is not None and value(message.frameInfo, "isMainFrame")
-                and str(message.body) == "ready"):
+        if not (host and host.webview is not None and value(message.frameInfo, "isMainFrame")):
+            return
+        if str(message.name) == "workbenchReady" and str(message.body) == "ready":
             host.webview.alpha = 1
+        elif str(message.name) == "workbenchTheme":
+            try:
+                host.apply_theme(validate_theme(json.loads(str(message.body))))
+            except (ValueError, WorkspaceError):
+                pass
 
     @objc_method
     def webView_didStartProvisionalNavigation_(self, webview, navigation):
@@ -104,6 +113,7 @@ class WorkbenchWindow:
     def __init__(self, app, server):
         self.app, self.server = app, server
         self.controller = self.webview = self.handler = None
+        self.close_button = None
         self.loaded = False
         self.navigation_error = None
 
@@ -111,10 +121,8 @@ class WorkbenchWindow:
         self.controller = ObjCClass("UIViewController").alloc().init()
         self.controller.modalPresentationStyle = 0
         self.controller.modalInPresentation = True
-        self.controller.overrideUserInterfaceStyle = 2
         view = self.controller.view
-        view.backgroundColor = ObjCClass("UIColor").colorWithRed_green_blue_alpha_(
-            24 / 255, 24 / 255, 24 / 255, 1)
+        self.apply_theme(self.app.preferences.snapshot()["theme"])
         configuration = ObjCClass("WKWebViewConfiguration").alloc().init()
         # The desktop content mode gives iPad keyboards the Mac command bindings.
         configuration.defaultWebpagePreferences.preferredContentMode = 2
@@ -123,6 +131,7 @@ class WorkbenchWindow:
         self.handler = WorkbenchHandler.alloc().init()
         self.handler.host_ref = weakref.ref(self)
         configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchReady")
+        configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchTheme")
         self.webview = ObjCClass("WKWebView").alloc().initWithFrame_configuration_(view.bounds, configuration)
         self.webview.alpha = 0
         self.webview.opaque = False
@@ -136,9 +145,10 @@ class WorkbenchWindow:
         view.addSubview_(self.webview)
 
         close = ObjCClass("UIButton").buttonWithType_(1)
+        self.close_button = close
         close.translatesAutoresizingMaskIntoConstraints = False
         close.setImage_forState_(ObjCClass("UIImage").systemImageNamed_("xmark"), 0)
-        close.tintColor = value(ObjCClass("UIColor"), "lightGrayColor")
+        self.apply_theme(self.app.preferences.snapshot()["theme"])
         close.addTarget_action_forControlEvents_(self.handler, SEL("closeTap"), 1 << 6)
         view.addSubview_(close)
         ObjCClass("NSLayoutConstraint").activateConstraints_([
@@ -155,14 +165,32 @@ class WorkbenchWindow:
         self.webview.loadRequest_(ObjCClass("NSURLRequest").requestWithURL_(url))
         presenter().presentViewController_animated_completion_(self.controller, True, None)
 
+    def apply_theme(self, theme):
+        def color(key):
+            hex_value = theme["colors"][key]
+            rgb = [int(hex_value[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+            return ObjCClass("UIColor").colorWithRed_green_blue_alpha_(*rgb, 1)
+
+        background = color("sideBar.background")
+        self.controller.overrideUserInterfaceStyle = 1 if theme["type"] in ("light", "hcLight") else 2
+        self.controller.view.backgroundColor = background
+        if self.webview:
+            self.webview.backgroundColor = background
+            self.webview.underPageBackgroundColor = background
+            self.webview.scrollView.backgroundColor = background
+        if self.close_button:
+            self.close_button.tintColor = color("foreground")
+
     def close(self):
         if self.webview:
             self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchReady")
+            self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchTheme")
             self.webview.navigationDelegate = None
             self.webview.stopLoading()
         if self.controller and self.controller.presentingViewController is not None:
             self.controller.dismissViewControllerAnimated_completion_(False, None)
         self.controller = self.webview = self.handler = None
+        self.close_button = None
 
 
 def main():
