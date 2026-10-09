@@ -22,6 +22,8 @@ Read README.md for the architecture, runtime limits, and validation commands.
   Wait for theme loading and layout restoration, including on workspace reload.
   Use the saved theme for native, HTML, and initial workbench colors; preserve user
   settings and do not persist unconfirmed theme previews.
+- Keep native keyboard focus and the first editable DOM field in sync after reveal.
+  A blinking Monaco caret alone does not confirm that WebKit can receive text input.
 - Keep custom product strings in `frontend/src/strings.ts` and load upstream
   language packs before importing workbench code.
 - Run the relevant Python and built-frontend integration tests after behavior changes.

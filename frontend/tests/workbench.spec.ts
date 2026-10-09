@@ -258,6 +258,32 @@ test('a lost save reply is not blindly replayed after reconnection', async ({ pa
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
 
+test('activating the first native input keeps the command palette and its caret intact', async ({ page, host }) => {
+  await page.addInitScript(() => {
+    (window as any).nativeFocusRequests = 0;
+    (window as any).webkit = { messageHandlers: {
+      workbenchReady: { postMessage() {} },
+      workbenchFocus: { postMessage() {
+        (window as any).nativeFocusRequests++;
+        setTimeout(() => (window as any).pythonaWorkbench.activateInput(), 0);
+      } },
+    } };
+  });
+  await page.goto(host.url);
+  await ready(page);
+  await shortcut(page, 'Shift+p');
+  const input = page.locator('.quick-input-widget:visible input');
+  await expect.poll(() => page.evaluate(() => (window as any).nativeFocusRequests)).toBe(1);
+  await expect(input).toHaveValue('>');
+  await page.keyboard.insertText('Color Theme');
+  await expect(input).toHaveValue('>Color Theme');
+  await expect(page.locator('.quick-input-list')).toContainText('Preferences: Color Theme');
+  await page.keyboard.press('Escape');
+  await shortcut(page, 'Shift+p');
+  await expect(input).toBeVisible();
+  expect(await page.evaluate(() => (window as any).nativeFocusRequests)).toBe(1);
+});
+
 test('opens a selected workspace, edits Unicode, saves, and restores it', async ({ page, host }) => {
   const errors: string[] = [];
   const external: string[] = [];

@@ -57,6 +57,12 @@ class WorkbenchHandler(NSObject, auto_rename=True):
             return
         if str(message.name) == "workbenchReady" and str(message.body) == "ready":
             host.webview.alpha = 1
+            # DOM focus acquired while transparent does not make WebKit a native
+            # keyboard responder. Preserve the focused editor/input when revealing it.
+            host.webview.becomeFirstResponder()
+        elif str(message.name) == "workbenchFocus" and str(message.body) == "focus":
+            host.webview.becomeFirstResponder()
+            host.webview.evaluateJavaScript_completionHandler_("window.pythonaWorkbench?.activateInput()", None)
         elif str(message.name) == "workbenchTheme":
             try:
                 host.apply_theme(validate_theme(json.loads(str(message.body))))
@@ -150,6 +156,7 @@ class WorkbenchWindow:
             notifications.addObserver_selector_name_object_(self.handler, SEL("resume:"), name, None)
         configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchReady")
         configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchTheme")
+        configuration.userContentController.addScriptMessageHandler_name_(self.handler, "workbenchFocus")
         self.webview = ObjCClass("WKWebView").alloc().initWithFrame_configuration_(view.bounds, configuration)
         self.webview.alpha = 0
         self.webview.opaque = False
@@ -211,6 +218,7 @@ class WorkbenchWindow:
         if self.webview:
             self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchReady")
             self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchTheme")
+            self.webview.configuration.userContentController.removeScriptMessageHandlerForName_("workbenchFocus")
             self.webview.navigationDelegate = None
             self.webview.stopLoading()
         if self.controller and self.controller.presentingViewController is not None:
