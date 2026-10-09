@@ -25,7 +25,13 @@ Read README.md for the architecture, runtime limits, and validation commands.
 - Activate native editor input in response to a real code-area tap, preserving
   the tapped position, scrolling, composition, and other workbench inputs.
   Use public WebKit APIs scoped to this window; do not install process-wide hooks.
+  Leave startup keyboard focus and cursor visibility under the existing workbench behavior.
 - Keep custom product strings in `frontend/src/strings.ts` and load upstream
   language packs before importing workbench code.
+  Select the UI locale from `bootstrap.language`, normalize regional variants, use
+  Brazilian Portuguese for Portuguese locales, and fall back to English otherwise.
+  Bundle complete upstream language packs locally and load only the selected pack.
 - Run the relevant Python and built-frontend integration tests after behavior changes.
   Native smoke tests use temporary workspaces and must not edit the user's projects.
+  Check first-tap input by launching `main.py` normally with a restored editor;
+  opening or focusing it through native JavaScript first can mask input-session failures.
